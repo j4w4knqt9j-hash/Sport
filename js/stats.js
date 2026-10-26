@@ -64,6 +64,7 @@ export function normalize(a) {
     elevation: a.total_elevation_gain || 0,
     speed: a.average_speed || 0,
     hr: a.average_heartrate || null,
+    maxHr: a.max_heartrate || null,
     effort: a.suffer_score ?? null,
     ...(a.laps ? { laps: a.laps } : {}),
   };

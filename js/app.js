@@ -1,5 +1,6 @@
 import * as Strava from './strava.js';
-import { demoActivities } from './demo.js';
+import { demoActivities, demoSplits } from './demo.js';
+import * as Detail from './detail.js';
 import * as Coach from './coach.js';
 import {
   SPORTS, SPORT_KEYS, normalize, isoDay, addDays, currentMonday, mondayOf,
@@ -32,6 +33,8 @@ const state = {
   listFilter: 'all',
   syncing: false,
   coachBusy: false,
+  detailId: null,
+  detailLoading: null,
 };
 
 let charts = [];
@@ -403,7 +406,7 @@ function renderList(acts) {
       html += `<div class="list-week">${fmtWeekRange(new Date(a.week + 'T00:00:00Z'))}</div><div class="card" style="padding:4px 16px">`;
     }
     html += `
-      <div class="act">
+      <div class="act" data-open="${esc(a.id)}">
         ${iconBox(a.sport)}
         <div style="min-width:0">
           <div class="title">${esc(a.name)}</div>
@@ -414,10 +417,7 @@ function renderList(acts) {
             <div><b>${a.pace ? fmtPace(a.pace.distance, a.pace.time, a.sport) : '–'}</b><span>${a.sport === 'ride' ? 'Vitesse' : 'Allure'}</span></div>
             ${a.sport !== 'swim' ? `<div><b>${Math.round(a.elevation)} m</b><span>D+</span></div>` : ''}
           </div>
-          <div class="act-foot">
-            ${a.paceNote ? `<span class="note">⚠ ${esc(a.paceNote)}</span>` : '<span></span>'}
-            <button class="link" data-exclude="${esc(a.id)}">${a.paceNote === 'Exclue manuellement' ? 'Réintégrer' : 'Exclure de l\'allure'}</button>
-          </div>
+          ${a.paceNote ? `<div class="act-foot"><span class="note">⚠ ${esc(a.paceNote)}</span></div>` : ''}
         </div>
       </div>`;
   }
@@ -430,6 +430,153 @@ function renderList(acts) {
         .map(([k, l]) => `<button data-filter="${k}" class="${f === k ? 'active' : ''}">${l}</button>`).join('')}
     </div>
     ${html || '<p class="muted">Aucune sortie.</p>'}`;
+}
+
+// ---------- Détail d'une sortie ----------
+
+function renderDetail(acts) {
+  const a = acts.find(x => x.id === state.detailId);
+  if (!a) { state.detailId = null; return renderList(acts); }
+  const sport = a.sport;
+  const demo = loadPrefs().demo;
+
+  // tronçons : séries (natation), calculés en démo, ou flux Strava mis en cache
+  let detail = Detail.cachedDetail(a.id);
+  if (sport !== 'swim' && !detail) {
+    if (demo) detail = { splits: demoSplits(a, Detail.SPLIT[sport]) };
+    else if (Strava.isConnected()) loadStreams(a);
+  }
+  const splits = Detail.splitsOf(a, detail);
+  const insights = Detail.analyse(a, acts, splits, { swimLimit: paceInfo.limit });
+  const isFlagged = x => sport === 'swim' && paceInfo.limit && x.time / x.distance * 100 < paceInfo.limit;
+  const hrSplits = splits.filter(x => x.hr);
+  const hrAvg = a.hr || (hrSplits.length ? hrSplits.reduce((t, x) => t + x.hr * x.time, 0) / hrSplits.reduce((t, x) => t + x.time, 0) : null);
+  const color = SPORTS[sport].color;
+  const tones = { good: cssVar('--good'), bad: cssVar('--bad'), info: cssVar('--ride') };
+  const icons = { good: '▲', bad: '▼', info: '●' };
+
+  const stat = (label, value) => value ? `<div class="tile"><span>${label}</span><strong>${value}</strong></div>` : '';
+  const hrMax = a.maxHr || (splits.some(x => x.hr) ? Math.max(...splits.map(x => x.hr || 0)) : null);
+
+  const splitRows = splits.map((x, i) => {
+    const v = paceValue(x.distance / x.time, sport);
+    const flagged = isFlagged(x);
+    const label = sport === 'swim' ? `${i + 1}. ${fmtDistance(x.distance, sport)}`
+      : x.distance < Detail.SPLIT[sport] * 0.95 ? `${fmtDistance(x.distance, sport)}` : `${sport === 'run' ? i + 1 : (i + 1) * 5} km`;
+    return `<tr class="${flagged ? 'flag' : ''}">
+      <td>${label}</td>
+      <td>${fmtShortPace(v, sport)}${flagged ? ' ⚠' : ''}</td>
+      <td>${fmtDuration(x.time)}</td>
+      ${sport !== 'swim' ? `<td>${x.hr ?? '–'}</td><td>${x.gain} m</td>` : ''}
+    </tr>`;
+  }).join('');
+
+  const splitUnit = sport === 'run' ? 'min/km' : sport === 'ride' ? 'km/h' : 'min/100 m';
+  const splitTitle = sport === 'swim' ? 'Séries' : sport === 'run' ? 'Kilomètre par kilomètre' : 'Par tronçon de 5 km';
+  let splitBody;
+  if (splits.length) {
+    splitBody = `
+      <div class="chart-box small"><canvas id="split-chart"></canvas></div>
+      <table class="splits">
+        <thead><tr><th>${sport === 'swim' ? 'Série' : 'Tronçon'}</th><th>${sport === 'ride' ? 'km/h' : 'Allure'}</th><th>Temps</th>${sport !== 'swim' ? '<th>FC</th><th>D+</th>' : ''}</tr></thead>
+        <tbody>${splitRows}</tbody>
+      </table>
+      ${splits.some(isFlagged) ? '<p class="muted">⚠ Série écartée des allures (bug montre probable).</p>' : ''}`;
+  } else if (state.detailLoading === a.id) {
+    splitBody = '<p class="muted">Chargement du détail depuis Strava…</p>';
+  } else if (sport === 'swim') {
+    splitBody = '<p class="muted">Pas de détail des séries. Synchronise pour le récupérer.</p>';
+  } else {
+    splitBody = `<p class="muted">Détail indisponible${Strava.isConnected() ? '' : ' (connecte Strava)'}.</p>${Strava.isConnected() ? '<button class="btn ghost" data-action="reload-detail">Réessayer</button>' : ''}`;
+  }
+
+  $view.innerHTML = `
+    ${demoBanner()}
+    <button class="back" data-action="back">‹ Sorties</button>
+    <div class="card detail-head">
+      <div class="detail-title">
+        ${iconBox(sport)}
+        <div style="min-width:0">
+          <h2 class="name">${esc(a.name)}</h2>
+          <div class="muted">${fmtActivityDate(a.local)}</div>
+        </div>
+      </div>
+      <div class="tiles three">
+        ${stat('Distance', fmtDistance(a.distance, sport))}
+        ${stat('Temps', fmtDuration(a.time))}
+        ${stat(sport === 'ride' ? 'Vitesse' : 'Allure', a.pace ? fmtPace(a.pace.distance, a.pace.time, sport) : '–')}
+        ${sport !== 'swim' ? stat('Dénivelé', `${Math.round(a.elevation)} m`) : stat('Séries', splits.length || null)}
+        ${stat('FC moy.', hrAvg ? `${Math.round(hrAvg)} bpm` : null)}
+        ${stat('FC max', hrMax ? `${Math.round(hrMax)} bpm` : null)}
+        ${stat('Effort relatif', a.effort ?? null)}
+        ${stat('Temps total', a.elapsed > a.time ? fmtDuration(a.elapsed) : null)}
+      </div>
+      ${a.paceNote ? `<p class="note-line">⚠ ${esc(a.paceNote)}</p>` : ''}
+    </div>
+
+    <div class="card">
+      <h2>Analyse</h2>
+      ${insights.length ? insights.map(x => `
+        <div class="insight">
+          <span class="ico" style="color:${tones[x.tone]}">${icons[x.tone]}</span>
+          <div><strong>${esc(x.title)}</strong><p>${esc(x.text)}</p></div>
+        </div>`).join('') : '<p class="muted">Pas encore assez de sorties pour comparer.</p>'}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>${splitTitle}</h2><span class="muted">${splitUnit}</span></div>
+      ${splitBody}
+    </div>
+
+    <button class="btn ghost" data-exclude="${esc(a.id)}">${a.paceNote === 'Exclue manuellement' ? 'Réintégrer dans les stats d\'allure' : 'Exclure des stats d\'allure'}</button>`;
+
+  if (splits.length && window.Chart) {
+    // barres en vitesse (m/s) : plus la barre est haute, plus c'est rapide ; axe affiché en allure
+    const vals = splits.map(x => x.distance / x.time);
+    const hasHr = splits.some(x => x.hr);
+    charts.push(new Chart(document.getElementById('split-chart'), {
+      data: {
+        labels: splits.map((_, i) => String(sport === 'ride' ? (i + 1) * 5 : i + 1)),
+        datasets: [
+          { type: 'bar', data: vals, backgroundColor: splits.map(x => isFlagged(x) ? cssVar('--warn') : color), borderRadius: 4, yAxisID: 'y' },
+          ...(hasHr ? [{ type: 'line', data: splits.map(x => x.hr), borderColor: cssVar('--bad'), borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'hr' }] : []),
+        ],
+      },
+      options: {
+        maintainAspectRatio: false,
+        scales: {
+          x: { grid: { display: false } },
+          y: {
+            min: Math.min(...vals) * 0.9,
+            max: Math.max(...vals) * 1.03,
+            ticks: { maxTicksLimit: 5, callback: v => fmtShortPace(paceValue(v, sport), sport) },
+          },
+          ...(hasHr ? { hr: { position: 'right', grid: { display: false }, ticks: { maxTicksLimit: 5 } } } : {}),
+        },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              label: c => c.dataset.yAxisID === 'hr' ? `FC ${c.raw} bpm` : fmtPaceValue(paceValue(c.raw, sport), sport),
+            },
+          },
+        },
+      },
+    }));
+  }
+}
+
+async function loadStreams(a) {
+  if (state.detailLoading) return;
+  state.detailLoading = a.id;
+  try {
+    const streams = await Strava.fetchStreams(a.id);
+    Detail.saveDetail(a.id, { splits: Detail.splitsFromStreams(streams, Detail.SPLIT[a.sport]) });
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    state.detailLoading = null;
+    if (state.view === 'list' && state.detailId === a.id) render();
+  }
 }
 
 // ---------- Vue Coach ----------
@@ -554,9 +701,14 @@ function renderSettings() {
     <div class="card">
       <h2>Coach (Claude)</h2>
       <label class="field"><span>Clé API Anthropic</span><input id="anthropic-key" type="password" autocomplete="off" placeholder="sk-ant-…" value="${esc(Coach.getApiKey())}"></label>
+      <label class="field"><span>Modèle</span>
+        <select id="coach-model">
+          ${Coach.MODELS.map(m => `<option value="${m.id}" ${Coach.getModel() === m.id ? 'selected' : ''}>${m.label} · ${m.cost}</option>`).join('')}
+        </select>
+      </label>
       <label class="field"><span>Ton objectif (pour le coach)</span><input id="goal" autocomplete="off" placeholder="Ex. : triathlon M en juin 2027" value="${esc(prefs.goal || '')}"></label>
       <button class="btn primary" data-action="save-coach">Enregistrer</button>
-      <p class="muted">Crée une clé sur <code>console.anthropic.com</code> (crédit prépayé, quelques centimes par question). La clé reste uniquement sur ce téléphone.</p>
+      <p class="muted">Crée une clé sur <code>console.anthropic.com</code> (crédit prépayé). Coûts estimés. Un changement de modèle s'applique à la prochaine conversation. La clé reste uniquement sur ce téléphone.</p>
     </div>
 
     <div class="card">
@@ -586,7 +738,7 @@ function renderSettings() {
 function render() {
   destroyCharts();
   chartDefaults();
-  document.getElementById('title').textContent = TITLES[state.view];
+  document.getElementById('title').textContent = state.view === 'list' && state.detailId ? 'Sortie' : TITLES[state.view];
   document.querySelectorAll('.tabbar button').forEach(b => b.classList.toggle('active', b.dataset.view === state.view));
 
   const acts = activities();
@@ -595,6 +747,7 @@ function render() {
   else if (state.view === 'week') renderWeek(acts);
   else if (state.view === 'progress') renderProgress(acts);
   else if (state.view === 'coach') renderCoach();
+  else if (state.detailId) renderDetail(acts);
   else renderList(acts);
 }
 
@@ -670,6 +823,7 @@ document.querySelector('.tabbar').addEventListener('click', e => {
   const b = e.target.closest('button[data-view]');
   if (!b) return;
   state.view = b.dataset.view;
+  state.detailId = null;
   render();
   window.scrollTo(0, 0);
 });
@@ -678,7 +832,16 @@ document.getElementById('sync-btn').addEventListener('click', () => sync());
 
 $view.addEventListener('click', e => {
   const t = e.target.closest('button');
-  if (!t) return;
+  if (!t) {
+    const row = e.target.closest('.act[data-open]');
+    if (row) {
+      state.listScroll = window.scrollY;
+      state.detailId = row.dataset.open;
+      render();
+      window.scrollTo(0, 0);
+    }
+    return;
+  }
   const d = t.dataset;
   if (d.week) { state.weekOffset = Math.min(0, state.weekOffset + Number(d.week)); render(); }
   else if (d.mode) { state.chartMode = d.mode; render(); }
@@ -693,6 +856,15 @@ $view.addEventListener('click', e => {
     render();
   }
   else if (d.ask) sendCoach(d.ask);
+  else if (d.action === 'back') {
+    state.detailId = null;
+    render();
+    window.scrollTo(0, state.listScroll || 0);
+  }
+  else if (d.action === 'reload-detail') {
+    const a = activities().find(x => x.id === state.detailId);
+    if (a) { loadStreams(a); render(); }
+  }
   else if (d.action === 'new-chat') {
     if (state.coachBusy || !confirm('Commencer une nouvelle conversation avec des stats à jour ?')) return;
     Coach.resetChat();
@@ -700,6 +872,7 @@ $view.addEventListener('click', e => {
   }
   else if (d.action === 'save-coach') {
     Coach.setApiKey(document.getElementById('anthropic-key').value);
+    Coach.setModel(document.getElementById('coach-model').value);
     savePrefs({ goal: document.getElementById('goal').value.trim() });
     toast('Réglages du coach enregistrés');
   }

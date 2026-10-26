@@ -352,3 +352,25 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 6px; font-
   cursor: pointer;
 }
 .send:disabled, .composer textarea:disabled { opacity: 0.5; }
+
+/* ---------- Détail d'une sortie ---------- */
+.act[data-open] { cursor: pointer; position: relative; padding-right: 18px; }
+.act[data-open]::after { content: "›"; position: absolute; right: 0; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 22px; }
+.back { border: 0; background: none; color: var(--accent); font-weight: 700; font-size: 16px; padding: 4px 0 10px; cursor: pointer; }
+.detail-title { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; }
+.detail-title .name { margin: 0; font-size: 18px; text-transform: none; letter-spacing: 0; color: var(--text); overflow-wrap: anywhere; }
+.tiles.three { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.tiles.three .tile { padding: 10px; }
+.tiles.three .tile strong { font-size: 15px; }
+.note-line { color: var(--warn); font-size: 13px; font-weight: 600; margin: 10px 0 0; }
+.insight { display: grid; grid-template-columns: 20px 1fr; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.insight:last-child { border-bottom: 0; padding-bottom: 0; }
+.insight .ico { font-size: 13px; line-height: 1.6; }
+.insight strong { font-size: 15px; }
+.insight p { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+.chart-box.small { height: 170px; margin-bottom: 10px; }
+table.splits { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+table.splits th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; padding: 6px 4px; border-bottom: 1px solid var(--border); }
+table.splits td { padding: 7px 4px; border-bottom: 1px solid var(--border); }
+table.splits tr:last-child td { border-bottom: 0; }
+table.splits tr.flag td { color: var(--warn); }

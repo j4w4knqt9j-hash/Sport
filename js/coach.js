@@ -7,9 +7,27 @@ import {
 } from './stats.js';
 
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.132.1/+esm';
-const MODEL = 'claude-opus-5-5';
 const CHAT_KEY = 'trisuivi.chat';
 const KEY_KEY = 'trisuivi.anthropicKey';
+const MODEL_KEY = 'trisuivi.coachModel';
+
+// Coût estimé par question : ~5 000 jetons en entrée, ~1 500 en sortie (réflexion comprise)
+export const MODELS = [
+  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (conseillé)', cost: '≈ 5 centimes / question' },
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', cost: '≈ 2,5 centimes / question' },
+  { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5', cost: '≈ 0,1 centime / question' },
+];
+
+export function getModel() {
+  try {
+    const m = localStorage.getItem(MODEL_KEY);
+    return MODELS.some(x => x.id === m) ? m : MODELS[0].id;
+  } catch { return MODELS[0].id; }
+}
+
+export function setModel(id) {
+  localStorage.setItem(MODEL_KEY, id);
+}
 
 export const SUGGESTIONS = [
   'Analyse ma semaine',
@@ -125,19 +143,22 @@ export async function ask(text, context, onText) {
   const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true });
 
   let chat = loadChat();
-  if (!chat?.messages?.length) chat = { context, createdAt: Date.now(), messages: [] };
+  if (!chat?.messages?.length) chat = { context, model: getModel(), createdAt: Date.now(), messages: [] };
+  // une conversation garde le modèle avec lequel elle a commencé
+  const model = chat.model || MODELS[0].id;
+  // Haiku n'a pas de modèle de secours côté serveur
+  const fallback = model === 'claude-haiku-5-5' ? {} : { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' };
   chat.messages.push({ role: 'user', content: text });
   saveChat(chat);
 
   try {
     const stream = client.beta.messages.stream({
-      model: MODEL,
+      model,
       max_tokens: 16000,
       thinking: { type: 'adaptive' },
       output_config: { effort: 'medium' },
       cache_control: { type: 'ephemeral' },
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
+      ...fallback,
       system: [
         { type: 'text', text: SYSTEM },
         { type: 'text', text: `# Données d'entraînement de l'athlète\n\n${chat.context}` },

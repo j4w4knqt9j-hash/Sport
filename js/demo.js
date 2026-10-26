@@ -61,3 +61,22 @@ export function demoActivities(weeks = 20) {
   }
   return out;
 }
+
+// Tronçons fictifs pour la page de détail en mode démo
+export function demoSplits(act, unit) {
+  const rand = rng(Number(act.id) * 7919);
+  const n = Math.floor(act.distance / unit);
+  const rest = act.distance - n * unit;
+  const lengths = [...Array(n).fill(unit), ...(rest > unit * 0.3 ? [rest] : [])];
+  const base = act.time / act.distance;
+  const hr0 = act.sport === 'run' ? 148 : 132;
+  return lengths.map((d, i) => {
+    const fatigue = 1 + (i / lengths.length) * 0.04;
+    return {
+      distance: Math.round(d),
+      time: Math.round(d * base * (0.95 + rand() * 0.08) * fatigue),
+      hr: Math.round(hr0 + i * 1.2 + rand() * 6),
+      gain: Math.round(rand() * act.elevation / Math.max(1, lengths.length) * 2),
+    };
+  });
+}
