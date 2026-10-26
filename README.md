@@ -7,6 +7,8 @@ Appli mobile (PWA) pour suivre son entraînement en **natation, vélo et course 
 - **Sorties** : liste des activités par semaine, filtrable par sport.
 - **Mode démo** pour tester sans compte Strava.
 
+Seules les activités à partir du **1er septembre 2026** sont prises en compte (constante `START_DATE` dans `js/app.js`).
+
 Pas de serveur : l'appli tourne dans le navigateur du téléphone et parle directement à l'API Strava. Les activités sont enregistrées sur le téléphone et seules les nouvelles sont téléchargées à chaque synchronisation.
 
 ## Mise en ligne (GitHub Pages)

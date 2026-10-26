@@ -1,7 +1,7 @@
 import * as Strava from './strava.js';
 import { demoActivities } from './demo.js';
 import {
-  SPORTS, SPORT_KEYS, normalize, isoDay, addDays, currentMonday,
+  SPORTS, SPORT_KEYS, normalize, isoDay, addDays, currentMonday, mondayOf,
   weekTotals, weeklySeries, previousAverage, loadRatio, paceSeries, records,
   fmtDuration, fmtDistance, fmtPace, fmtPaceValue, fmtShortPace,
   fmtActivityDate, fmtWeekRange, fmtDayMonth, fmtNumber,
@@ -9,6 +9,16 @@ import {
 
 const STORE = 'trisuivi.activities';
 const PREFS = 'trisuivi.prefs';
+
+// Seules les activités à partir de cette date sont prises en compte
+const START_DATE = '2026-09-01';
+const START_EPOCH = Math.floor(new Date(`${START_DATE}T00:00:00`).getTime() / 1000);
+const START_MONDAY = mondayOf(new Date(`${START_DATE}T00:00:00Z`));
+
+// Nombre de semaines à afficher : 12 au plus, sans remonter avant la date de début
+function chartWeeks(monday) {
+  return Math.max(1, Math.min(12, Math.round((monday - START_MONDAY) / (7 * 864e5)) + 1));
+}
 
 const TITLES = { week: 'Semaine', progress: 'Progrès', list: 'Sorties', settings: 'Réglages' };
 
@@ -41,8 +51,8 @@ function storedActivities() {
 }
 
 function activities() {
-  if (loadPrefs().demo) return demoActivities().map(normalize).filter(Boolean);
-  return storedActivities();
+  const all = loadPrefs().demo ? demoActivities().map(normalize).filter(Boolean) : storedActivities();
+  return all.filter(a => a.local >= START_DATE);
 }
 
 // ---------- Utilitaires ----------
@@ -176,7 +186,7 @@ function renderWeek(acts) {
     ${loadCard}
 
     <div class="card">
-      <h2>12 dernières semaines</h2>
+      <h2>${chartWeeks(monday)} dernières semaines</h2>
       <div class="segmented full">
         ${modes.map(([k, l]) => `<button data-mode="${k}" class="${state.chartMode === k ? 'active' : ''}">${l}</button>`).join('')}
       </div>
@@ -188,7 +198,7 @@ function renderWeek(acts) {
 
 function drawWeeklyChart(acts, monday) {
   if (!window.Chart) return;
-  const series = weeklySeries(acts, monday, 12);
+  const series = weeklySeries(acts, monday, chartWeeks(monday));
   const labels = series.map(w => fmtDayMonth(w.monday));
   const mode = state.chartMode;
   let datasets, unit;
@@ -434,7 +444,7 @@ function renderSettings() {
       </div>
     </div>
 
-    <p class="muted" style="text-align:center">TriSuivi · natation, vélo, course</p>`;
+    <p class="muted" style="text-align:center">TriSuivi · natation, vélo, course<br>Activités prises en compte depuis le 1<sup>er</sup> septembre 2026</p>`;
 }
 
 // ---------- Rendu ----------
@@ -468,8 +478,8 @@ async function sync(full = false) {
   btn.classList.add('spinning');
   try {
     const existing = full ? [] : storedActivities();
-    const after = existing.reduce((m, a) => Math.max(m, a.epoch), 0);
-    const raw = await Strava.fetchActivities(after ? after - 1 : 0);
+    const after = existing.reduce((m, a) => Math.max(m, a.epoch - 1), START_EPOCH);
+    const raw = await Strava.fetchActivities(after);
     const fresh = raw.map(normalize).filter(Boolean);
     const byId = new Map(existing.map(a => [a.id, a]));
     let added = 0;
@@ -477,7 +487,8 @@ async function sync(full = false) {
       if (!byId.has(a.id)) added++;
       byId.set(a.id, a);
     }
-    localStorage.setItem(STORE, JSON.stringify([...byId.values()]));
+    const kept = [...byId.values()].filter(a => a.local >= START_DATE);
+    localStorage.setItem(STORE, JSON.stringify(kept));
     savePrefs({ lastSync: Date.now() });
     toast(added ? `${added} nouvelle${added > 1 ? 's' : ''} activité${added > 1 ? 's' : ''}` : 'Déjà à jour');
     render();
