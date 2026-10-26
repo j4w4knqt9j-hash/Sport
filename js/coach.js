@@ -3,7 +3,7 @@
 
 import {
   SPORTS, SPORT_KEYS, isoDay, currentMonday, weeklySeries,
-  fmtDuration, fmtDistance, fmtPace, fmtPaceValue, fmtWeekRange, fmtActivityDate,
+  fmtDuration, fmtDistance, fmtPace, fmtPaceValue, fmtWeekRange, fmtActivityDate, fmtClock,
 } from './stats.js';
 
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.132.1/+esm';
@@ -132,8 +132,9 @@ function friendlyError(Anthropic, e) {
   return e.message || 'Erreur inconnue';
 }
 
-// Envoie `text` au coach. `onText(texteCumulé)` est appelé au fil de la réponse.
-export async function ask(text, context, onText) {
+// Appel en streaming commun au chat et aux analyses de sortie.
+// `onText(texteCumulé)` est appelé au fil de la réponse ; renvoie le message final.
+async function streamClaude({ model, system, messages }, onText) {
   let Anthropic;
   try {
     Anthropic = await loadSdk();
@@ -141,16 +142,8 @@ export async function ask(text, context, onText) {
     throw new Error('Impossible de charger le module Claude (connexion ?)');
   }
   const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true });
-
-  let chat = loadChat();
-  if (!chat?.messages?.length) chat = { context, model: getModel(), createdAt: Date.now(), messages: [] };
-  // une conversation garde le modèle avec lequel elle a commencé
-  const model = chat.model || MODELS[0].id;
   // Haiku n'a pas de modèle de secours côté serveur
   const fallback = model === 'claude-haiku-5-5' ? {} : { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' };
-  chat.messages.push({ role: 'user', content: text });
-  saveChat(chat);
-
   try {
     const stream = client.beta.messages.stream({
       model,
@@ -159,13 +152,9 @@ export async function ask(text, context, onText) {
       output_config: { effort: 'medium' },
       cache_control: { type: 'ephemeral' },
       ...fallback,
-      system: [
-        { type: 'text', text: SYSTEM },
-        { type: 'text', text: `# Données d'entraînement de l'athlète\n\n${chat.context}` },
-      ],
-      messages: chat.messages,
+      system,
+      messages,
     });
-
     let shown = '';
     for await (const event of stream) {
       if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -175,20 +164,102 @@ export async function ask(text, context, onText) {
     }
     const final = await stream.finalMessage();
     if (final.stop_reason === 'refusal') {
-      chat.messages.pop();
-      saveChat(chat);
-      throw new Error('Le coach n\'a pas pu répondre à cette question. Reformule-la autrement.');
+      throw new Error('Le coach n\'a pas pu répondre. Reformule autrement.');
     }
+    return final;
+  } catch (e) {
+    if (e instanceof Anthropic.APIError) throw new Error(friendlyError(Anthropic, e));
+    throw e;
+  }
+}
+
+function systemFor(context) {
+  return [
+    { type: 'text', text: SYSTEM },
+    { type: 'text', text: `# Données d'entraînement de l'athlète\n\n${context}` },
+  ];
+}
+
+// Envoie `text` au coach. `onText(texteCumulé)` est appelé au fil de la réponse.
+export async function ask(text, context, onText) {
+  let chat = loadChat();
+  if (!chat?.messages?.length) chat = { context, model: getModel(), createdAt: Date.now(), messages: [] };
+  chat.messages.push({ role: 'user', content: text });
+  saveChat(chat);
+  try {
+    // une conversation garde le modèle avec lequel elle a commencé
+    const final = await streamClaude({
+      model: chat.model || MODELS[0].id,
+      system: systemFor(chat.context),
+      messages: chat.messages,
+    }, onText);
     // on renvoie le contenu complet (y compris les blocs de réflexion) aux tours suivants
     chat.messages.push({ role: 'assistant', content: final.content });
     saveChat(chat);
     return final;
   } catch (e) {
-    const last = chat.messages[chat.messages.length - 1];
-    if (last?.role === 'user') { chat.messages.pop(); saveChat(chat); }
-    if (e instanceof Anthropic.APIError) throw new Error(friendlyError(Anthropic, e));
+    chat.messages.pop();
+    saveChat(chat);
     throw e;
   }
+}
+
+// ---------- Analyse d'une sortie par l'IA ----------
+
+const AI_KEY = 'trisuivi.ai.';
+
+export function cachedAnalysis(id) {
+  try { return JSON.parse(localStorage.getItem(AI_KEY + id)); } catch { return null; }
+}
+
+// Description d'une sortie : stats, tronçons et constats chiffrés de l'appli
+export function describeActivity(act, splits, insights, splitLabel) {
+  const s = act.sport;
+  const lines = [
+    `Sport : ${SPORTS[s].label}`,
+    `Nom : « ${act.name.replace(/\s+/g, ' ').slice(0, 80)} »`,
+    `Date : ${fmtActivityDate(act.local)}`,
+    `Distance : ${fmtDistance(act.distance, s)} · temps en mouvement ${fmtDuration(act.time)} · temps total ${fmtDuration(act.elapsed || act.time)}`,
+    `Allure moyenne : ${act.pace ? fmtPace(act.pace.distance, act.pace.time, s) : 'écartée'}${act.paceNote ? ` (${act.paceNote})` : ''}`,
+  ];
+  if (s !== 'swim') lines.push(`Dénivelé : ${Math.round(act.elevation)} m`);
+  if (act.hr) lines.push(`FC moyenne ${Math.round(act.hr)} bpm${act.maxHr ? `, max ${Math.round(act.maxHr)} bpm` : ''}`);
+  if (act.effort != null) lines.push(`Effort relatif Strava : ${act.effort}`);
+  if (splits.length) {
+    lines.push('', `Tronçons (${splitLabel}) :`);
+    splits.forEach((x, i) => {
+      lines.push(`- ${i + 1}. ${fmtDistance(x.distance, s)} en ${fmtClock(x.time)} · ${fmtPace(x.distance, x.time, s)}${x.hr ? ` · FC ${x.hr}` : ''}${s !== 'swim' ? ` · D+ ${x.gain} m` : ''}${x.flagged ? ' · série buggée (longueurs fantômes), à ignorer' : ''}`);
+    });
+  }
+  if (insights.length) {
+    lines.push('', 'Constats calculés par l\'appli :');
+    insights.forEach(x => lines.push(`- ${x.title} : ${x.text}`));
+  }
+  return lines.join('\n');
+}
+
+const ANALYSIS_PROMPT = `Analyse cette sortie en t'appuyant sur ses tronçons, sa fréquence cardiaque et la comparaison avec mes autres séances (données plus haut).
+
+Réponds avec ces quatre parties, courtes :
+**En bref** : une ou deux phrases.
+**Points forts** : 2 ou 3 puces.
+**À améliorer** : 1 ou 2 puces.
+**Prochaine séance** : un conseil concret pour ma prochaine sortie dans ce sport (durée, allure ou intensité).`;
+
+export async function analyseActivity(act, description, context, onText) {
+  const model = getModel();
+  const final = await streamClaude({
+    model,
+    system: systemFor(context),
+    messages: [{ role: 'user', content: `${ANALYSIS_PROMPT}\n\n# La sortie\n\n${description}` }],
+  }, onText);
+  const result = { text: messageText(final), model, at: Date.now() };
+  try { localStorage.setItem(AI_KEY + act.id, JSON.stringify(result)); } catch { /* stockage plein */ }
+  return result;
+}
+
+export function modelLabel(id) {
+  return (MODELS.find(m => m.id === id)?.label || id).replace(' (conseillé)', '');
 }
 
 export function messageText(m) {

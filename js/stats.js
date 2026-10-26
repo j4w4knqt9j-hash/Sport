@@ -250,6 +250,14 @@ export function fmtDuration(sec) {
   return `${h}h${String(m).padStart(2, '0')}`;
 }
 
+// Durée précise à la seconde : « 5:20 » ou « 1:02:05 »
+export function fmtClock(sec) {
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const ss = String(s).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
 export function fmtDistance(m, sport) {
   if (sport === 'swim' && m < 10000) return `${nf0.format(m)} m`;
   return `${nf1.format(m / 1000)} km`;

@@ -374,3 +374,11 @@ table.splits th { text-align: left; font-size: 11px; color: var(--muted); font-w
 table.splits td { padding: 7px 4px; border-bottom: 1px solid var(--border); }
 table.splits tr:last-child td { border-bottom: 0; }
 table.splits tr.flag td { color: var(--warn); }
+
+.ai-card { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.ai-text p { margin: 0 0 8px; }
+.ai-text ul, .ai-text ol { margin: 0 0 10px; padding-left: 20px; }
+.ai-text li { margin-bottom: 4px; }
+.ai-text .msg.typing { padding: 4px 0; background: none; border: 0; }
+.ai-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.btn:disabled { opacity: 0.5; }

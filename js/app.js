@@ -6,7 +6,7 @@ import {
   SPORTS, SPORT_KEYS, normalize, isoDay, addDays, currentMonday, mondayOf,
   weekTotals, weeklySeries, previousAverage, loadRatio, paceSeries, records,
   annotatePace, averageSpeed, paceValue,
-  fmtDuration, fmtDistance, fmtPace, fmtPaceValue, fmtShortPace,
+  fmtDuration, fmtDistance, fmtPace, fmtPaceValue, fmtShortPace, fmtClock,
   fmtActivityDate, fmtWeekRange, fmtDayMonth, fmtNumber,
 } from './stats.js';
 
@@ -35,6 +35,8 @@ const state = {
   coachBusy: false,
   detailId: null,
   detailLoading: null,
+  aiBusy: null,
+  aiPartial: '',
 };
 
 let charts = [];
@@ -466,7 +468,7 @@ function renderDetail(acts) {
     return `<tr class="${flagged ? 'flag' : ''}">
       <td>${label}</td>
       <td>${fmtShortPace(v, sport)}${flagged ? ' ⚠' : ''}</td>
-      <td>${fmtDuration(x.time)}</td>
+      <td>${fmtClock(x.time)}</td>
       ${sport !== 'swim' ? `<td>${x.hr ?? '–'}</td><td>${x.gain} m</td>` : ''}
     </tr>`;
   }).join('');
@@ -514,8 +516,10 @@ function renderDetail(acts) {
       ${a.paceNote ? `<p class="note-line">⚠ ${esc(a.paceNote)}</p>` : ''}
     </div>
 
+    ${aiCard(a)}
+
     <div class="card">
-      <h2>Analyse</h2>
+      <h2>Stats clés</h2>
       ${insights.length ? insights.map(x => `
         <div class="insight">
           <span class="ico" style="color:${tones[x.tone]}">${icons[x.tone]}</span>
@@ -562,6 +566,61 @@ function renderDetail(acts) {
         },
       },
     }));
+  }
+}
+
+function aiCard(a) {
+  let body;
+  if (!Coach.getApiKey()) {
+    body = `<p class="muted">Ajoute ta clé API Anthropic pour que le coach analyse tes sorties.</p>
+      <button class="btn ghost" data-goto="settings">Aller aux réglages</button>`;
+  } else if (state.aiBusy === a.id) {
+    body = `<div id="ai-body" class="ai-text">${state.aiPartial ? Coach.renderMarkdown(state.aiPartial) : '<div class="msg typing"><i></i><i></i><i></i></div>'}</div>`;
+  } else {
+    const done = Coach.cachedAnalysis(a.id);
+    const waiting = state.detailLoading === a.id;
+    body = done
+      ? `<div class="ai-text">${Coach.renderMarkdown(done.text)}</div>
+         <div class="ai-foot">
+           <span class="muted">${esc(Coach.modelLabel(done.model))} · ${new Date(done.at).toLocaleDateString('fr-FR')}</span>
+           <button class="link" data-action="ai-analyse">Régénérer</button>
+         </div>
+         <button class="btn ghost" data-action="ai-discuss">En parler avec le coach</button>`
+      : `<p class="muted">Le coach analyse tes tronçons, ta FC et compare avec tes autres séances.</p>
+         <button class="btn primary" data-action="ai-analyse" ${waiting || state.aiBusy ? 'disabled' : ''}>✨ Analyser cette sortie</button>`;
+  }
+  return `<div class="card ai-card"><h2>Analyse du coach</h2>${body}</div>`;
+}
+
+async function runAiAnalysis() {
+  const acts = activities();
+  const a = acts.find(x => x.id === state.detailId);
+  if (!a || state.aiBusy) return;
+  const sport = a.sport;
+  const detail = Detail.cachedDetail(a.id) || (loadPrefs().demo && sport !== 'swim' ? { splits: demoSplits(a, Detail.SPLIT[sport]) } : null);
+  const splits = Detail.splitsOf(a, detail).map(x => ({
+    ...x,
+    flagged: sport === 'swim' && paceInfo.limit && x.time / x.distance * 100 < paceInfo.limit,
+  }));
+  const insights = Detail.analyse(a, acts, splits, { swimLimit: paceInfo.limit });
+  const unit = sport === 'swim' ? 'séries de la montre' : sport === 'run' ? 'par kilomètre' : 'par 5 km';
+  const description = Coach.describeActivity(a, splits, insights, unit);
+
+  state.aiBusy = a.id;
+  state.aiPartial = '';
+  render();
+  try {
+    await Coach.analyseActivity(a, description, coachContext(acts), partial => {
+      state.aiPartial = partial;
+      const el = document.getElementById('ai-body');
+      if (el) el.innerHTML = Coach.renderMarkdown(partial);
+    });
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    state.aiBusy = null;
+    state.aiPartial = '';
+    if (state.view === 'list' && state.detailId === a.id) render();
   }
 }
 
@@ -623,16 +682,19 @@ function renderCoach() {
   window.scrollTo(0, document.body.scrollHeight);
 }
 
-async function sendCoach(text) {
-  text = text.trim();
-  if (!text || state.coachBusy) return;
-  const acts = activities();
-  const context = Coach.buildContext(acts, {
+function coachContext(acts) {
+  return Coach.buildContext(acts, {
     startDate: '1er septembre 2026',
     goal: loadPrefs().goal,
     swimRef: paceInfo.ref,
     swimLimit: paceInfo.limit,
   });
+}
+
+async function sendCoach(text) {
+  text = text.trim();
+  if (!text || state.coachBusy) return;
+  const context = coachContext(activities());
   state.coachBusy = true;
   render();
   const chatEl = document.getElementById('chat');
@@ -856,6 +918,15 @@ $view.addEventListener('click', e => {
     render();
   }
   else if (d.ask) sendCoach(d.ask);
+  else if (d.action === 'ai-analyse') runAiAnalysis();
+  else if (d.action === 'ai-discuss') {
+    const a = activities().find(x => x.id === state.detailId);
+    if (!a) return;
+    state.view = 'coach';
+    state.detailId = null;
+    render();
+    sendCoach(`J'aimerais parler de ma sortie ${SPORTS[a.sport].label.toLowerCase()} « ${a.name} » du ${fmtActivityDate(a.local).split(' · ')[0]}. Voici ton analyse :\n\n${Coach.cachedAnalysis(a.id)?.text || ''}\n\nQu'est-ce que tu me conseilles de travailler en priorité ?`);
+  }
   else if (d.action === 'back') {
     state.detailId = null;
     render();
