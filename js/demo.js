@@ -19,6 +19,14 @@ const PLAN = [
   ['Run', 6, '09:30', 9000, 2.6, 'Sortie longue course'],
 ];
 
+// Découpe une séance de natation en séries ; parfois une série « buggée » (longueurs fantômes)
+function demoLaps(distance, time, rand) {
+  const n = 3 + Math.floor(rand() * 3);
+  const laps = Array.from({ length: n }, () => [Math.round(distance / n / 50) * 50, Math.round(time / n)]);
+  if (rand() < 0.3) laps[1][0] = Math.round(laps[1][0] * 1.3 / 50) * 50;
+  return laps;
+}
+
 export function demoActivities(weeks = 20) {
   const rand = rng(42);
   const start = currentMonday(-(weeks - 1));
@@ -47,6 +55,7 @@ export function demoActivities(weeks = 20) {
         total_elevation_gain: type === 'Swim' ? 0 : Math.round(distance / 1000 * (4 + rand() * 8)),
         average_speed,
         suffer_score: Math.round(moving_time / 60 * (0.8 + rand() * 0.8)),
+        laps: type === 'Swim' ? demoLaps(distance, moving_time, rand) : undefined,
       });
     }
   }

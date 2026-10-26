@@ -76,6 +76,17 @@ async function accessToken() {
   return auth.accessToken;
 }
 
+// Détail des séries (laps) d'une activité : [[distance, temps en mouvement], ...]
+export async function fetchLaps(id) {
+  const token = await accessToken();
+  const res = await fetch(`${API}/activities/${id}/laps`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Erreur Strava (${res.status})`);
+  const laps = await res.json();
+  return laps.map(l => [l.distance || 0, l.moving_time || 0]);
+}
+
 // Récupère toutes les activités postérieures à `after` (timestamp Unix), page par page
 export async function fetchActivities(after = 0, onPage = () => {}) {
   const token = await accessToken();

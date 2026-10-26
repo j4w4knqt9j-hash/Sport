@@ -65,13 +65,77 @@ export function normalize(a) {
     speed: a.average_speed || 0,
     hr: a.average_heartrate || null,
     effort: a.suffer_score ?? null,
+    ...(a.laps ? { laps: a.laps } : {}),
   };
+}
+
+// ---------- Filtre des allures aberrantes ----------
+
+function median(arr) {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+// Allure de référence en natation (s/100 m) : médiane de toutes les séries nagées,
+// ou des séances entières si on n'a pas encore le détail des séries.
+export function swimReference(acts) {
+  const swims = acts.filter(a => a.sport === 'swim');
+  const laps = swims.flatMap(a => (a.laps || []).filter(([d, t]) => d > 0 && t > 0).map(([d, t]) => t / d * 100));
+  if (laps.length >= 3) return median(laps);
+  return median(swims.filter(a => a.distance > 0 && a.time > 0).map(a => a.time / a.distance * 100));
+}
+
+// Ajoute à chaque activité `pace` = { distance, time } servant aux stats d'allure (null si écartée)
+// et `paceNote` qui explique ce qui a été écarté.
+// Natation : une série plus rapide que la référence de plus de `tolerance` est considérée
+// comme un bug de la montre (longueurs fantômes) et sortie du calcul.
+export function annotatePace(acts, { excluded = new Set(), tolerance = 0.12 } = {}) {
+  const ref = swimReference(acts);
+  const limit = ref ? ref * (1 - tolerance) : 0;
+  for (const a of acts) {
+    a.pace = null;
+    a.paceNote = null;
+    if (excluded.has(a.id)) { a.paceNote = 'Exclue manuellement'; continue; }
+    if (!a.distance || !a.time) continue;
+    if (a.sport !== 'swim' || !ref) { a.pace = { distance: a.distance, time: a.time }; continue; }
+
+    const laps = (a.laps || []).filter(([d, t]) => d > 0 && t > 0);
+    if (laps.length) {
+      const ok = laps.filter(([d, t]) => t / d * 100 >= limit);
+      const removed = laps.length - ok.length;
+      if (ok.length) {
+        a.pace = {
+          distance: ok.reduce((x, [d]) => x + d, 0),
+          time: ok.reduce((x, [, t]) => x + t, 0),
+        };
+      }
+      if (removed) a.paceNote = ok.length ? `${removed} série${removed > 1 ? 's' : ''} écartée${removed > 1 ? 's' : ''} (bug montre)` : 'Allure écartée (bug montre)';
+    } else if (a.time / a.distance * 100 < limit) {
+      a.paceNote = 'Allure écartée (bug montre)';
+    } else {
+      a.pace = { distance: a.distance, time: a.time };
+    }
+  }
+  return { ref, limit };
+}
+
+// Vitesse moyenne (m/s) d'un sport sur les `weeks` semaines finissant à `monday`, allures filtrées
+export function averageSpeed(acts, sport, monday, weeks = 8) {
+  const from = isoDay(addDays(monday, -7 * (weeks - 1)));
+  const to = isoDay(addDays(monday, 6));
+  let list = acts.filter(a => a.sport === sport && a.pace && a.week >= from && a.week <= to);
+  if (!list.length) list = acts.filter(a => a.sport === sport && a.pace);
+  const d = list.reduce((x, a) => x + a.pace.distance, 0);
+  const t = list.reduce((x, a) => x + a.pace.time, 0);
+  return t ? d / t : null;
 }
 
 // ---------- Agrégats ----------
 
 function emptyTotals() {
-  return { time: 0, distance: 0, count: 0, effort: 0, elevation: 0 };
+  return { time: 0, distance: 0, count: 0, effort: 0, elevation: 0, paceDistance: 0, paceTime: 0 };
 }
 
 export function weekTotals(acts, mondayKey) {
@@ -85,6 +149,7 @@ export function weekTotals(acts, mondayKey) {
       t.count += 1;
       t.effort += a.effort || 0;
       t.elevation += a.elevation;
+      if (a.pace) { t.paceDistance += a.pace.distance; t.paceTime += a.pace.time; }
     }
   }
   return res;
@@ -140,9 +205,9 @@ export function paceValue(speed, sport) {
 
 export function paceSeries(acts, sport) {
   const pts = acts
-    .filter(a => a.sport === sport && a.distance >= MIN_DIST[sport] && a.time > 0)
+    .filter(a => a.sport === sport && a.pace && a.distance >= MIN_DIST[sport])
     .sort((a, b) => a.local.localeCompare(b.local))
-    .map(a => ({ act: a, value: paceValue(a.distance / a.time, sport) }));
+    .map(a => ({ act: a, value: paceValue(a.pace.distance / a.pace.time, sport) }));
   // moyenne glissante sur 5 sorties
   pts.forEach((p, i) => {
     const win = pts.slice(Math.max(0, i - 4), i + 1);
@@ -155,10 +220,10 @@ export function records(acts, sport) {
   const list = acts.filter(a => a.sport === sport);
   const year = String(new Date().getFullYear());
   const thisYear = list.filter(a => a.local.startsWith(year));
-  const paced = list.filter(a => a.distance >= MIN_DIST[sport] && a.time > 0);
+  const paced = list.filter(a => a.pace && a.distance >= MIN_DIST[sport]);
   const better = sport === 'ride' ? (a, b) => b - a : (a, b) => a - b;
   const best = paced
-    .map(a => ({ a, v: paceValue(a.distance / a.time, sport) }))
+    .map(a => ({ a, v: paceValue(a.pace.distance / a.pace.time, sport) }))
     .sort((x, y) => better(x.v, y.v))[0];
   const longest = [...list].sort((a, b) => b.distance - a.distance)[0];
   const sum = (arr, f) => arr.reduce((s, a) => s + a[f], 0);

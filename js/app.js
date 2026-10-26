@@ -3,6 +3,7 @@ import { demoActivities } from './demo.js';
 import {
   SPORTS, SPORT_KEYS, normalize, isoDay, addDays, currentMonday, mondayOf,
   weekTotals, weeklySeries, previousAverage, loadRatio, paceSeries, records,
+  annotatePace, averageSpeed, paceValue,
   fmtDuration, fmtDistance, fmtPace, fmtPaceValue, fmtShortPace,
   fmtActivityDate, fmtWeekRange, fmtDayMonth, fmtNumber,
 } from './stats.js';
@@ -50,9 +51,17 @@ function storedActivities() {
   catch { return []; }
 }
 
+let paceInfo = { ref: null, limit: 0 };
+
 function activities() {
-  const all = loadPrefs().demo ? demoActivities().map(normalize).filter(Boolean) : storedActivities();
-  return all.filter(a => a.local >= START_DATE);
+  const prefs = loadPrefs();
+  const all = prefs.demo ? demoActivities().map(normalize).filter(Boolean) : storedActivities();
+  const acts = all.filter(a => a.local >= START_DATE);
+  paceInfo = annotatePace(acts, {
+    excluded: new Set(prefs.excluded || []),
+    tolerance: prefs.tolerance ?? 0.12,
+  });
+  return acts;
 }
 
 // ---------- Utilitaires ----------
@@ -77,13 +86,6 @@ function cssVar(name) {
 function iconBox(sport) {
   const s = SPORTS[sport];
   return `<div class="sport-icon" style="background:${s.color}22">${s.icon}</div>`;
-}
-
-function deltaBadge(cur, prev) {
-  if (!prev) return '';
-  const pct = Math.round((cur / prev - 1) * 100);
-  const cls = pct >= 0 ? 'up' : 'down';
-  return `<span class="delta ${cls}">${pct >= 0 ? '+' : ''}${pct} %</span>`;
 }
 
 function destroyCharts() {
@@ -119,12 +121,9 @@ function renderWeek(acts) {
   const monday = currentMonday(state.weekOffset);
   const key = isoDay(monday);
   const cur = weekTotals(acts, key);
-  // semaine en cours : on compare avec la semaine précédente arrêtée au même jour
-  const now = new Date();
-  const sameDay = isoDay(addDays(new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())), -7));
-  const prevActs = state.weekOffset === 0 ? acts.filter(a => a.local.slice(0, 10) <= sameDay) : acts;
-  const prev = weekTotals(prevActs, isoDay(addDays(monday, -7)));
+  const prev = weekTotals(acts, isoDay(addDays(monday, -7)));
   const avg = previousAverage(acts, monday);
+  const isCurrent = state.weekOffset === 0;
   const load = loadRatio(acts, monday);
   const label = state.weekOffset === 0 ? 'Cette semaine'
     : state.weekOffset === -1 ? 'Semaine dernière'
@@ -132,21 +131,24 @@ function renderWeek(acts) {
 
   const sportCards = SPORT_KEYS.map(s => {
     const t = cur[s];
-    const ref = avg[s].time;
-    const pct = ref ? Math.round((t.time / ref) * 100) : null;
+    const p = prev[s];
+    const pct = p.time ? Math.round((t.time / p.time) * 100) : null;
+    const prevTxt = p.count ? `${fmtDuration(p.time)} · ${fmtDistance(p.distance, s)}` : 'rien';
+    const avgTxt = avg[s].time ? ` · moy. 4 sem. ${fmtDuration(avg[s].time)}` : '';
     return `
       <div class="card sport-card">
         ${iconBox(s)}
         <div>
           <div class="name">${SPORTS[s].label}</div>
-          <div class="meta">${t.count} séance${t.count > 1 ? 's' : ''} · ${t.count ? fmtPace(t.distance, t.time, s) : '–'}</div>
+          <div class="meta">${t.count} séance${t.count > 1 ? 's' : ''} · ${t.paceTime ? fmtPace(t.paceDistance, t.paceTime, s) : '–'}</div>
         </div>
         <div class="val">
           <strong>${t.count ? fmtDistance(t.distance, s) : '–'}</strong>
           <span>${t.count ? fmtDuration(t.time) : ''}</span>
         </div>
         <div class="bar"><i style="width:${Math.min(100, pct ?? 0)}%;background:${SPORTS[s].color}"></i></div>
-        <div class="bar-caption">${pct == null ? 'Pas encore de référence' : `${pct} % de ta moyenne (${fmtDuration(ref)}/sem. sur 4 sem.)`}</div>
+        <div class="bar-caption">Sem. ${isCurrent ? 'dernière' : 'précédente'} : ${prevTxt}${avgTxt}</div>
+        ${sportGoal(acts, s, t, p, monday, isCurrent)}
       </div>`;
   }).join('');
 
@@ -174,7 +176,9 @@ function renderWeek(acts) {
 
     <div class="card hero">
       <div class="big">${fmtDuration(cur.all.time)}</div>
-      <div class="sub">d'entraînement ${deltaBadge(cur.all.time, prev.all.time)} ${prev.all.time ? (state.weekOffset === 0 ? 'vs sem. dernière à la même date' : 'vs semaine précédente') : ''}</div>
+      <div class="sub">d'entraînement · sem. ${isCurrent ? 'dernière' : 'précédente'} : <b>${fmtDuration(prev.all.time)}</b></div>
+      ${prev.all.time ? `<div class="hero-bar"><i style="width:${Math.min(100, cur.all.time / prev.all.time * 100)}%"></i></div>` : ''}
+      <div class="hero-goal">${heroGoal(cur.all.time, prev.all.time, isCurrent)}</div>
       <div class="row">
         <div><strong>${cur.all.count}</strong>séances</div>
         <div><strong>${Math.round(cur.all.elevation)} m</strong>D+</div>
@@ -194,6 +198,34 @@ function renderWeek(acts) {
     </div>`;
 
   drawWeeklyChart(acts, monday);
+}
+
+function heroGoal(cur, prev, isCurrent) {
+  if (!prev) return isCurrent ? 'Aucun entraînement la semaine dernière' : 'Aucun entraînement la semaine précédente';
+  const diff = prev - cur;
+  if (diff > 0) {
+    return isCurrent
+      ? `Reste <b>${fmtDuration(diff)}</b> pour égaler la semaine dernière`
+      : `${fmtDuration(diff)} de moins que la semaine précédente`;
+  }
+  return `🎉 Semaine ${isCurrent ? 'dernière' : 'précédente'} dépassée${diff < 0 ? ` de <b>${fmtDuration(-diff)}</b>` : ''}`;
+}
+
+// Temps restant pour égaler la semaine précédente, converti en distance avec l'allure moyenne
+function sportGoal(acts, sport, cur, prev, monday, isCurrent) {
+  if (!prev.time) return '';
+  const diff = prev.time - cur.time;
+  if (diff <= 0) {
+    return `<div class="goal done">✓ Dépassée${diff < 0 ? ` de ${fmtDuration(-diff)}` : ''}</div>`;
+  }
+  const speed = averageSpeed(acts, sport, monday);
+  let dist = '';
+  if (speed) {
+    const step = { swim: 50, run: 500, ride: 1000 }[sport];
+    const meters = Math.max(step, Math.round(diff * speed / step) * step);
+    dist = ` ≈ <b>${fmtDistance(meters, sport)}</b> <span>à ${fmtPaceValue(paceValue(speed, sport), sport)}</span>`;
+  }
+  return `<div class="goal">${isCurrent ? 'Reste' : 'Manquait'} <b>${fmtDuration(diff)}</b>${dist}</div>`;
 }
 
 function drawWeeklyChart(acts, monday) {
@@ -377,8 +409,12 @@ function renderList(acts) {
           <div class="stats">
             <div><b>${fmtDistance(a.distance, a.sport)}</b><span>Distance</span></div>
             <div><b>${fmtDuration(a.time)}</b><span>Temps</span></div>
-            <div><b>${fmtPace(a.distance, a.time, a.sport)}</b><span>${a.sport === 'ride' ? 'Vitesse' : 'Allure'}</span></div>
+            <div><b>${a.pace ? fmtPace(a.pace.distance, a.pace.time, a.sport) : '–'}</b><span>${a.sport === 'ride' ? 'Vitesse' : 'Allure'}</span></div>
             ${a.sport !== 'swim' ? `<div><b>${Math.round(a.elevation)} m</b><span>D+</span></div>` : ''}
+          </div>
+          <div class="act-foot">
+            ${a.paceNote ? `<span class="note">⚠ ${esc(a.paceNote)}</span>` : '<span></span>'}
+            <button class="link" data-exclude="${esc(a.id)}">${a.paceNote === 'Exclue manuellement' ? 'Réintégrer' : 'Exclure de l\'allure'}</button>
           </div>
         </div>
       </div>`;
@@ -397,6 +433,7 @@ function renderList(acts) {
 // ---------- Vue Réglages ----------
 
 function renderSettings() {
+  activities(); // calcule l'allure de référence affichée plus bas
   const auth = Strava.getAuth();
   const prefs = loadPrefs();
   const connected = Strava.isConnected();
@@ -436,6 +473,18 @@ function renderSettings() {
         <li>Copie le Client ID et le Client Secret ci-dessus, puis connecte-toi.</li>
       </ol>
     </div>`}
+
+    <div class="card">
+      <h2>Filtre natation</h2>
+      <p class="muted" style="margin-top:0">Les séries nettement plus rapides que ton allure habituelle (bug de la montre, longueurs fantômes) sont retirées des stats d'allure. Elles comptent toujours dans le volume.</p>
+      <label class="field"><span>Écarter les séries plus rapides que ton habitude de</span>
+        <select id="tolerance">
+          ${[0.08, 0.10, 0.12, 0.15, 0.20].map(v => `<option value="${v}" ${Math.abs((prefs.tolerance ?? 0.12) - v) < 1e-6 ? 'selected' : ''}>${Math.round(v * 100)} %${v === 0.12 ? ' (conseillé)' : ''}</option>`).join('')}
+        </select>
+      </label>
+      ${paceInfo.ref ? `<p class="muted">Allure habituelle : <b>${fmtPaceValue(paceInfo.ref, 'swim')}</b> → séries écartées si plus rapides que <b>${fmtPaceValue(paceInfo.limit, 'swim')}</b></p>` : ''}
+      <p class="muted">Tu peux aussi exclure une sortie à la main depuis l'onglet Sorties.</p>
+    </div>
 
     <div class="card">
       <div class="switch-row">
@@ -484,8 +533,15 @@ async function sync(full = false) {
     const byId = new Map(existing.map(a => [a.id, a]));
     let added = 0;
     for (const a of fresh) {
-      if (!byId.has(a.id)) added++;
-      byId.set(a.id, a);
+      const old = byId.get(a.id);
+      if (!old) added++;
+      byId.set(a.id, old?.laps ? { ...a, laps: old.laps } : a);
+    }
+    // détail des séries de natation, pour filtrer les longueurs fantômes
+    for (const a of byId.values()) {
+      if (a.sport !== 'swim' || a.laps || a.local < START_DATE) continue;
+      try { a.laps = await Strava.fetchLaps(a.id); }
+      catch { break; } // on réessaiera à la prochaine synchro
     }
     const kept = [...byId.values()].filter(a => a.local >= START_DATE);
     localStorage.setItem(STORE, JSON.stringify(kept));
@@ -543,6 +599,13 @@ $view.addEventListener('click', e => {
   else if (d.sport) { state.progSport = d.sport; render(); }
   else if (d.filter) { state.listFilter = d.filter; render(); }
   else if (d.goto) { state.view = d.goto; render(); }
+  else if (d.exclude) {
+    const set = new Set(loadPrefs().excluded || []);
+    set.has(d.exclude) ? set.delete(d.exclude) : set.add(d.exclude);
+    savePrefs({ excluded: [...set] });
+    toast(set.has(d.exclude) ? 'Sortie exclue des stats d\'allure' : 'Sortie réintégrée');
+    render();
+  }
   else if (d.action === 'sync') sync();
   else if (d.action === 'full-sync') sync(true);
   else if (d.action === 'logout') {
@@ -561,6 +624,11 @@ $view.addEventListener('click', e => {
 });
 
 $view.addEventListener('change', e => {
+  if (e.target.id === 'tolerance') {
+    savePrefs({ tolerance: Number(e.target.value) });
+    render();
+    return;
+  }
   if (e.target.id === 'demo-toggle') {
     savePrefs({ demo: e.target.checked });
     toast(e.target.checked ? 'Mode démo activé' : 'Mode démo désactivé');

@@ -281,3 +281,28 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 6px; font-
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 .hero .delta { color: #fff; background: rgba(255,255,255,0.22); }
+
+.hero .sub b { font-weight: 800; }
+.hero-bar { height: 6px; margin-top: 12px; border-radius: 99px; background: rgba(255,255,255,0.25); overflow: hidden; }
+.hero-bar i { display: block; height: 100%; border-radius: 99px; background: #fff; }
+.hero-goal { margin-top: 8px; font-size: 14px; }
+.hero-goal b { font-weight: 800; }
+
+.goal { grid-column: 1 / -1; margin-top: -4px; font-size: 13px; }
+.goal b { font-weight: 800; }
+.goal span { color: var(--muted); }
+.goal.done { color: var(--good); font-weight: 700; }
+
+.act-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.act-foot .note { font-size: 12px; color: var(--warn); font-weight: 600; }
+.link { border: 0; background: none; padding: 4px 0; font-size: 12px; color: var(--muted); text-decoration: underline; cursor: pointer; flex: none; }
+
+.field select {
+  width: 100%;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 15px;
+}
