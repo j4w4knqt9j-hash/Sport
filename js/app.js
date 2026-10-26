@@ -1,5 +1,6 @@
 import * as Strava from './strava.js';
 import { demoActivities } from './demo.js';
+import * as Coach from './coach.js';
 import {
   SPORTS, SPORT_KEYS, normalize, isoDay, addDays, currentMonday, mondayOf,
   weekTotals, weeklySeries, previousAverage, loadRatio, paceSeries, records,
@@ -21,7 +22,7 @@ function chartWeeks(monday) {
   return Math.max(1, Math.min(12, Math.round((monday - START_MONDAY) / (7 * 864e5)) + 1));
 }
 
-const TITLES = { week: 'Semaine', progress: 'Progrès', list: 'Sorties', settings: 'Réglages' };
+const TITLES = { week: 'Semaine', progress: 'Progrès', list: 'Sorties', coach: 'Coach', settings: 'Réglages' };
 
 const state = {
   view: 'week',
@@ -30,6 +31,7 @@ const state = {
   progSport: 'run',
   listFilter: 'all',
   syncing: false,
+  coachBusy: false,
 };
 
 let charts = [];
@@ -430,6 +432,81 @@ function renderList(acts) {
     ${html || '<p class="muted">Aucune sortie.</p>'}`;
 }
 
+// ---------- Vue Coach ----------
+
+function renderCoach() {
+  if (!Coach.getApiKey()) {
+    $view.innerHTML = `
+      <div class="empty">
+        <div class="emoji">💬</div>
+        <h3>Ton coach perso</h3>
+        <p>Pose tes questions à Claude, qui connaît tes stats d'entraînement. Il faut une clé API Anthropic (payante à l'usage).</p>
+        <button class="btn primary" data-goto="settings">Ajouter ma clé dans les réglages</button>
+      </div>`;
+    return;
+  }
+  const chat = Coach.loadChat();
+  const msgs = chat?.messages || [];
+  const bubbles = msgs.map(m => m.role === 'user'
+    ? `<div class="msg user">${esc(Coach.messageText(m))}</div>`
+    : `<div class="msg bot">${Coach.renderMarkdown(Coach.messageText(m))}</div>`).join('');
+
+  const since = chat ? new Date(chat.createdAt).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : null;
+  $view.innerHTML = `
+    ${demoBanner()}
+    ${msgs.length ? `
+      <div class="chat-head">
+        <span class="muted">Stats du ${since}</span>
+        <button class="link" data-action="new-chat">Nouvelle conversation</button>
+      </div>` : `
+      <div class="card coach-intro">
+        <strong>Salut ! Je suis ton coach.</strong>
+        <p class="muted">Je connais tes séances depuis le 1<sup>er</sup> septembre : volumes, allures, charge. Demande-moi une analyse, un plan ou un conseil.</p>
+        <div class="chips wrap">
+          ${Coach.SUGGESTIONS.map(q => `<button data-ask="${esc(q)}">${esc(q)}</button>`).join('')}
+        </div>
+      </div>`}
+    <div class="chat" id="chat">${bubbles}</div>
+    <form class="composer" id="composer">
+      <textarea id="coach-input" rows="1" placeholder="Écris ta question…" ${state.coachBusy ? 'disabled' : ''}></textarea>
+      <button type="submit" class="send" aria-label="Envoyer" ${state.coachBusy ? 'disabled' : ''}>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </button>
+    </form>`;
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+async function sendCoach(text) {
+  text = text.trim();
+  if (!text || state.coachBusy) return;
+  const acts = activities();
+  const context = Coach.buildContext(acts, {
+    startDate: '1er septembre 2026',
+    goal: loadPrefs().goal,
+    swimRef: paceInfo.ref,
+    swimLimit: paceInfo.limit,
+  });
+  state.coachBusy = true;
+  render();
+  const chatEl = document.getElementById('chat');
+  document.querySelector('.coach-intro')?.remove();
+  chatEl.insertAdjacentHTML('beforeend', `<div class="msg user">${esc(text)}</div><div class="msg bot typing"><i></i><i></i><i></i></div>`);
+  const bot = chatEl.lastElementChild;
+  window.scrollTo(0, document.body.scrollHeight);
+  try {
+    await Coach.ask(text, context, partial => {
+      bot.classList.remove('typing');
+      bot.innerHTML = Coach.renderMarkdown(partial);
+      window.scrollTo(0, document.body.scrollHeight);
+    });
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    state.coachBusy = false;
+    if (state.view === 'coach') render();
+  }
+}
+
 // ---------- Vue Réglages ----------
 
 function renderSettings() {
@@ -475,6 +552,14 @@ function renderSettings() {
     </div>`}
 
     <div class="card">
+      <h2>Coach (Claude)</h2>
+      <label class="field"><span>Clé API Anthropic</span><input id="anthropic-key" type="password" autocomplete="off" placeholder="sk-ant-…" value="${esc(Coach.getApiKey())}"></label>
+      <label class="field"><span>Ton objectif (pour le coach)</span><input id="goal" autocomplete="off" placeholder="Ex. : triathlon M en juin 2027" value="${esc(prefs.goal || '')}"></label>
+      <button class="btn primary" data-action="save-coach">Enregistrer</button>
+      <p class="muted">Crée une clé sur <code>console.anthropic.com</code> (crédit prépayé, quelques centimes par question). La clé reste uniquement sur ce téléphone.</p>
+    </div>
+
+    <div class="card">
       <h2>Filtre natation</h2>
       <p class="muted" style="margin-top:0">Les séries nettement plus rapides que ton allure habituelle (bug de la montre, longueurs fantômes) sont retirées des stats d'allure. Elles comptent toujours dans le volume.</p>
       <label class="field"><span>Écarter les séries plus rapides que ton habitude de</span>
@@ -509,6 +594,7 @@ function render() {
   else if (!acts.length) $view.innerHTML = emptyState();
   else if (state.view === 'week') renderWeek(acts);
   else if (state.view === 'progress') renderProgress(acts);
+  else if (state.view === 'coach') renderCoach();
   else renderList(acts);
 }
 
@@ -606,6 +692,17 @@ $view.addEventListener('click', e => {
     toast(set.has(d.exclude) ? 'Sortie exclue des stats d\'allure' : 'Sortie réintégrée');
     render();
   }
+  else if (d.ask) sendCoach(d.ask);
+  else if (d.action === 'new-chat') {
+    if (state.coachBusy || !confirm('Commencer une nouvelle conversation avec des stats à jour ?')) return;
+    Coach.resetChat();
+    render();
+  }
+  else if (d.action === 'save-coach') {
+    Coach.setApiKey(document.getElementById('anthropic-key').value);
+    savePrefs({ goal: document.getElementById('goal').value.trim() });
+    toast('Réglages du coach enregistrés');
+  }
   else if (d.action === 'sync') sync();
   else if (d.action === 'full-sync') sync(true);
   else if (d.action === 'logout') {
@@ -621,6 +718,18 @@ $view.addEventListener('click', e => {
     Strava.setCredentials(id, secret);
     location.href = Strava.authorizeUrl();
   }
+});
+
+$view.addEventListener('submit', e => {
+  if (e.target.id !== 'composer') return;
+  e.preventDefault();
+  sendCoach(document.getElementById('coach-input').value);
+});
+
+$view.addEventListener('input', e => {
+  if (e.target.id !== 'coach-input') return;
+  e.target.style.height = 'auto';
+  e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px';
 });
 
 $view.addEventListener('change', e => {

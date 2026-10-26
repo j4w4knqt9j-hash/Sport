@@ -5,6 +5,7 @@ Appli mobile (PWA) pour suivre son entraînement en **natation, vélo et course 
 - **Semaine** : temps total, volume par discipline, comparaison avec la moyenne des 4 dernières semaines, charge d'entraînement (effort relatif Strava), graphique des 12 dernières semaines.
 - **Progrès** : meilleure allure, plus longue sortie, cumul annuel, tendance et courbe d'allure par sortie.
 - **Sorties** : liste des activités par semaine, filtrable par sport.
+- **Coach** : chat avec Claude (Anthropic), qui reçoit le résumé de tes semaines et de tes sorties pour analyser ton entraînement et proposer des séances. Nécessite une clé API Anthropic (Réglages → Coach), facturée à l'usage sur console.anthropic.com.
 - **Mode démo** pour tester sans compte Strava.
 
 Seules les activités à partir du **1er septembre 2026** sont prises en compte (constante `START_DATE` dans `js/app.js`).
