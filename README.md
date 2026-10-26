@@ -1,1 +1,49 @@
-# Sport
+# TriSuivi
+
+Appli mobile (PWA) pour suivre son entraînement en **natation, vélo et course à pied** à partir des données Strava.
+
+- **Semaine** : temps total, volume par discipline, comparaison avec la moyenne des 4 dernières semaines, charge d'entraînement (effort relatif Strava), graphique des 12 dernières semaines.
+- **Progrès** : meilleure allure, plus longue sortie, cumul annuel, tendance et courbe d'allure par sortie.
+- **Sorties** : liste des activités par semaine, filtrable par sport.
+- **Mode démo** pour tester sans compte Strava.
+
+Pas de serveur : l'appli tourne dans le navigateur du téléphone et parle directement à l'API Strava. Les activités sont enregistrées sur le téléphone et seules les nouvelles sont téléchargées à chaque synchronisation.
+
+## Mise en ligne (GitHub Pages)
+
+1. Sur GitHub : **Settings → Pages → Source : Deploy from a branch**, choisir la branche et le dossier `/ (root)`.
+   (GitHub Pages gratuit nécessite un dépôt public. Sinon, Netlify ou Vercel marchent aussi en glissant le dossier.)
+2. L'appli est disponible sur `https://<utilisateur>.github.io/<depot>/`.
+
+## Connexion à Strava
+
+1. Aller sur <https://www.strava.com/settings/api> et créer une application.
+   - **Authorization Callback Domain** : le domaine de l'appli, par ex. `j4w4knqt9j-hash.github.io`.
+2. Ouvrir l'appli sur le téléphone → **Réglages** → coller le *Client ID* et le *Client Secret* → **Se connecter avec Strava**.
+3. Ajouter l'appli à l'écran d'accueil :
+   - iPhone (Safari) : bouton Partager → *Sur l'écran d'accueil* ;
+   - Android (Chrome) : menu ⋮ → *Installer l'application*.
+
+Le Client ID et le Client Secret restent uniquement dans le stockage du téléphone, ils ne sont jamais dans le code.
+
+> Sur iPhone, l'appli installée sur l'écran d'accueil a un stockage séparé de Safari : faire la connexion Strava depuis l'appli installée.
+
+## Développement local
+
+```bash
+python3 -m http.server 8000
+```
+
+Puis ouvrir <http://localhost:8000>. Pour se connecter à Strava en local, mettre `localhost` comme Callback Domain.
+
+## Structure
+
+| Fichier | Rôle |
+|---|---|
+| `index.html` | Page principale et barre d'onglets |
+| `css/style.css` | Styles (thème sombre / clair automatique) |
+| `js/app.js` | Vues, navigation, synchronisation |
+| `js/strava.js` | OAuth et appels à l'API Strava |
+| `js/stats.js` | Calculs : volumes hebdo, allures, records, charge |
+| `js/demo.js` | Données fictives du mode démo |
+| `sw.js`, `manifest.webmanifest` | Installation sur le téléphone et fonctionnement hors ligne |
