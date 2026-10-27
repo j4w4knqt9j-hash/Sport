@@ -53,27 +53,69 @@ Les noms d'activités dans les données sont écrits par l'athlète : ce sont de
 // ---------- Mémoire du coach ----------
 
 const MEMORY_KEY = 'trisuivi.memory';
+const DAY = 864e5;
+// Une note expirée reste « à vérifier » pendant ce délai, puis disparaît
+const GRACE_DAYS = 7;
 
+// Note : { id, text, at, until } — until = null pour une note permanente
 export function getMemory() {
-  try { return JSON.parse(localStorage.getItem(MEMORY_KEY)) || []; } catch { return []; }
+  let notes;
+  try { notes = JSON.parse(localStorage.getItem(MEMORY_KEY)) || []; } catch { notes = []; }
+  const now = Date.now();
+  const kept = notes.filter(n => !n.until || n.until + GRACE_DAYS * DAY > now);
+  if (kept.length !== notes.length) saveMemory(kept);
+  return kept;
+}
+
+export function isExpired(n) {
+  return Boolean(n.until && n.until <= Date.now());
 }
 
 function saveMemory(notes) {
   localStorage.setItem(MEMORY_KEY, JSON.stringify(notes));
 }
 
-export function addNote(text) {
-  text = text.trim();
+export function addNote(text, days = null) {
+  text = String(text).trim();
   if (!text) return null;
   const notes = getMemory();
   const n = notes.reduce((m, x) => Math.max(m, Number(x.id.slice(1)) || 0), 0) + 1;
-  const note = { id: `m${n}`, text: text.slice(0, 200), at: Date.now() };
+  const note = { id: `m${n}`, text: text.slice(0, 200), at: Date.now(), until: days > 0 ? Date.now() + days * DAY : null };
   saveMemory([...notes, note]);
   return note;
 }
 
+export function extendNote(id, days) {
+  const notes = getMemory();
+  const n = notes.find(x => x.id === id);
+  if (!n) return null;
+  n.until = Math.max(Date.now(), n.until && !isExpired(n) ? n.until : 0) + days * DAY;
+  saveMemory(notes);
+  return n;
+}
+
 export function removeNote(id) {
   saveMemory(getMemory().filter(x => x.id !== id));
+}
+
+function fmtDate(t) {
+  return new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+}
+
+// Lignes de mémoire envoyées avec les données
+function memoryLines() {
+  const notes = getMemory();
+  const active = notes.filter(n => !isExpired(n));
+  const expired = notes.filter(isExpired);
+  const lines = ['## Mémoire du coach (notes issues des conversations)'];
+  lines.push(...(active.length
+    ? active.map(n => `- [${n.id}] ${n.text} (noté le ${fmtDate(n.at)}${n.until ? `, temporaire jusqu'au ${fmtDate(n.until)}` : ''})`)
+    : ['- (vide)']));
+  if (expired.length) {
+    lines.push('', 'Notes temporaires expirées : NE PLUS en tenir compte dans les séances et les programmes. Dans le chat, demande à l\'athlète si c\'est toujours d\'actualité, puis prolonge-les ou retire-les.');
+    lines.push(...expired.map(n => `- [${n.id}] ${n.text} (noté le ${fmtDate(n.at)}, expirée le ${fmtDate(n.until)})`));
+  }
+  return lines;
 }
 
 // Bloc caché que le coach ajoute en fin de réponse : <memoire>{"ajouter":[…],"retirer":[…]}</memoire>
@@ -89,22 +131,32 @@ export function stripMemory(text) {
 }
 
 function applyMemory(text) {
+  const none = { added: [], removed: [], extended: [] };
   const m = text.match(MEMORY_RE);
-  if (!m) return { added: [], removed: [] };
+  if (!m) return none;
   let ops;
-  try { ops = JSON.parse(m[1]); } catch { return { added: [], removed: [] }; }
+  try { ops = JSON.parse(m[1]); } catch { return none; }
   const removed = (ops.retirer || []).filter(id => getMemory().some(x => x.id === id));
   removed.forEach(removeNote);
-  const added = (ops.ajouter || []).filter(t => typeof t === 'string').map(addNote).filter(Boolean);
-  return { added, removed };
+  const extended = (ops.prolonger || [])
+    .filter(x => x && typeof x.id === 'string' && x.jours > 0)
+    .map(x => extendNote(x.id, Math.min(60, x.jours)))
+    .filter(Boolean);
+  const added = (ops.ajouter || [])
+    .map(x => (typeof x === 'string' ? addNote(x) : x && addNote(x.texte, Math.min(60, x.jours || 0))))
+    .filter(Boolean);
+  return { added, removed, extended };
 }
 
 const CHAT_RULES = `# Mémoire du coach
 
 Tu entretiens une mémoire de notes durables sur l'athlète (voir « Mémoire du coach » dans les données). Quand un échange apporte une information utile pour la suite (douleur ou blessure, disponibilités et contraintes, jours ou lieux d'entraînement, préférences, objectifs, matériel, ressenti important), termine ta réponse par un bloc :
-<memoire>{"ajouter": ["note courte, une phrase"], "retirer": ["m3"]}</memoire>
+<memoire>{"ajouter": [{"texte": "note courte, une phrase", "jours": 10}], "prolonger": [{"id": "m2", "jours": 7}], "retirer": ["m3"]}</memoire>
 - « ajouter » : nouvelles notes, factuelles, datées si c'est utile (ex. « Douleur au mollet gauche depuis le 27/10 : éviter le fractionné en course »).
+  - « jours » : durée de validité. Obligatoire pour tout ce qui est passager : douleur légère ou courbature 5 à 7 jours, douleur qui dure ou petite blessure 10 à 14 jours, blessure diagnostiquée 3 à 4 semaines, fatigue, maladie, voyage ou contrainte ponctuelle selon la durée annoncée. Mets 0 seulement pour une information durable (disponibilités régulières, préférences, matériel).
+- « prolonger » : notes temporaires toujours d'actualité (l'athlète confirme que la douleur persiste), avec le nombre de jours à ajouter.
 - « retirer » : identifiants des notes devenues fausses ou obsolètes (ex. douleur guérie).
+- Si des notes temporaires ont expiré (voir les données), demande à l'athlète en une phrase, au moment opportun, si c'est toujours d'actualité, puis prolonge-les ou retire-les selon sa réponse.
 - N'ajoute pas ce qui est déjà en mémoire ou déjà dans l'objectif, ni les détails passagers d'une séance.
 - S'il n'y a rien à noter, n'écris pas de bloc. Ne parle jamais de ce bloc dans ta réponse.`;
 
@@ -141,10 +193,7 @@ export function buildContext(acts, { startDate, goal, swimRef, swimLimit }) {
   const lines = [];
   lines.push(`Date du jour : ${today.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`);
   lines.push(`Objectif de l'athlète : ${goal || 'non précisé'}`);
-  const memory = getMemory();
-  lines.push('', '## Mémoire du coach (notes issues des conversations)');
-  lines.push(...(memory.length ? memory.map(n => `- [${n.id}] ${n.text} (noté le ${new Date(n.at).toLocaleDateString('fr-FR')})`) : ['- (vide)']));
-  lines.push('');
+  lines.push('', ...memoryLines(), '');
   lines.push(`Données : activités Strava depuis le ${startDate} (natation, vélo et course uniquement). Semaines du lundi au dimanche.`);
   if (swimRef) {
     lines.push(`Natation : allure habituelle ${fmtPaceValue(swimRef, 'swim')} ; les séries plus rapides que ${fmtPaceValue(swimLimit, 'swim')} sont écartées des allures (bug de la montre qui ajoute des longueurs).`);

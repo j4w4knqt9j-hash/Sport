@@ -1358,9 +1358,11 @@ document.addEventListener('keydown', e => {
 // Ce que le coach vient de retenir ou d'oublier, affiché sous sa dernière réponse
 function memoryFlash() {
   const f = state.memoryFlash;
-  if (!f || (!f.added.length && !f.removed.length)) return '';
+  if (!f || (!f.added.length && !f.removed.length && !f.extended?.length)) return '';
+  const until = n => n.until ? ` <i>(jusqu'au ${new Date(n.until).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })})</i>` : '';
   return `<div class="mem-flash" data-goto="settings">🧠 ${[
-    ...f.added.map(n => `Noté : ${esc(n.text)}`),
+    ...f.added.map(n => `Noté : ${esc(n.text)}${until(n)}`),
+    ...(f.extended || []).map(n => `Prolongé : ${esc(n.text)}${until(n)}`),
     ...(f.removed.length ? [`${f.removed.length} note${f.removed.length > 1 ? 's' : ''} retirée${f.removed.length > 1 ? 's' : ''}`] : []),
   ].join('<br>')}</div>`;
 }
@@ -1490,11 +1492,24 @@ function renderSettings() {
     <div class="card">
       <h2>Mémoire du coach</h2>
       <p class="muted" style="margin-top:0">Ce que le coach retient de vos conversations. Ces notes sont utilisées partout : chat, programme, prochaine séance, analyses.</p>
-      ${Coach.getMemory().length ? `<div class="mem-list">${Coach.getMemory().map(n => `
-        <div class="mem-note"><span>${esc(n.text)}<small>${new Date(n.at).toLocaleDateString('fr-FR')}</small></span>
-          <button class="link" data-action="del-note" data-id="${esc(n.id)}">Retirer</button></div>`).join('')}</div>`
+      ${Coach.getMemory().length ? `<div class="mem-list">${Coach.getMemory().map(n => {
+        const d = t => new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+        const exp = Coach.isExpired(n);
+        const status = !n.until ? 'permanente' : exp ? `<b class="exp">expirée le ${d(n.until)} : plus prise en compte</b>` : `jusqu'au ${d(n.until)}`;
+        return `
+        <div class="mem-note ${exp ? 'expired' : ''}"><span>${esc(n.text)}<small>noté le ${d(n.at)} · ${status}</small></span>
+          <span class="mem-actions">
+            ${n.until ? `<button class="link" data-action="extend-note" data-id="${esc(n.id)}">+7 j</button>` : ''}
+            <button class="link" data-action="del-note" data-id="${esc(n.id)}">Retirer</button>
+          </span></div>`;
+      }).join('')}</div>`
         : '<p class="muted">Aucune note pour l\'instant.</p>'}
       <label class="field" style="margin-top:10px"><span>Ajouter une note</span><input id="new-note" autocomplete="off" placeholder="Ex. : pas de piscine le jeudi"></label>
+      <label class="field"><span>Validité</span>
+        <select id="new-note-days">
+          ${[[0, 'Permanente'], [7, '7 jours'], [14, '14 jours'], [30, '30 jours']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+        </select>
+      </label>
       <button class="btn ghost" data-action="add-note">Ajouter</button>
     </div>
 
@@ -1733,7 +1748,11 @@ $view.addEventListener('click', e => {
     toast('Clé Intervals.icu enregistrée');
   }
   else if (d.action === 'add-note') {
-    if (!Coach.addNote(document.getElementById('new-note').value)) return toast('Écris une note d\'abord');
+    if (!Coach.addNote(document.getElementById('new-note').value, Number(document.getElementById('new-note-days').value))) return toast('Écris une note d\'abord');
+    render();
+  }
+  else if (d.action === 'extend-note') {
+    Coach.extendNote(d.id, 7);
     render();
   }
   else if (d.action === 'del-note') {
