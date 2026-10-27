@@ -240,13 +240,16 @@ function friendlyError(Anthropic, e) {
   if (e instanceof Anthropic.RateLimitError) return 'Trop de requêtes, réessaie dans une minute.';
   if (e instanceof Anthropic.APIConnectionError) return 'Pas de connexion au serveur de Claude.';
   if (e instanceof Anthropic.APIError && /credit|billing/i.test(e.message)) return 'Crédit API épuisé : recharge ton compte sur console.anthropic.com.';
-  if (e instanceof Anthropic.APIError) return `Erreur de l'API Claude (${e.status ?? '?'}).`;
+  if (e instanceof Anthropic.APIError) {
+    const detail = e.error?.error?.message || e.message || '';
+    return `Erreur de l'API Claude (${e.status ?? '?'})${detail ? ` : ${String(detail).slice(0, 300)}` : ''}`;
+  }
   return e.message || 'Erreur inconnue';
 }
 
 // Appel en streaming commun au chat et aux analyses de sortie.
 // `onText(texteCumulé)` est appelé au fil de la réponse ; renvoie le message final.
-async function streamClaude({ model, system, messages, format }, onText) {
+async function streamClaude({ model, system, messages, format, keepThinking }, onText) {
   let Anthropic;
   try {
     Anthropic = await loadSdk();
@@ -255,12 +258,21 @@ async function streamClaude({ model, system, messages, format }, onText) {
   }
   const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true });
   // Haiku n'a pas de modèle de secours côté serveur
-  const fallback = model === 'claude-haiku-5-5' ? {} : { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' };
+  const fallback = model === 'claude-haiku-5-5' ? {} : { fallbacks: 'default' };
+  const betas = [
+    ...(model === 'claude-haiku-5-5' ? [] : ['server-side-fallback-2026-07-01']),
+    // conversation : si le début a changé (mise à jour de l'appli), l'API ignore
+    // les anciens blocs de réflexion au lieu de refuser la requête
+    ...(keepThinking ? ['thinking-binding-controls-2026-08-01'] : []),
+  ];
   try {
     const stream = client.beta.messages.stream({
       model,
       max_tokens: 16000,
-      thinking: { type: 'adaptive' },
+      thinking: keepThinking
+        ? { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } }
+        : { type: 'adaptive' },
+      ...(betas.length ? { betas } : {}),
       output_config: { effort: 'medium', ...(format ? { format } : {}) },
       cache_control: { type: 'ephemeral' },
       ...fallback,
@@ -295,15 +307,20 @@ function systemFor(context) {
 // Envoie `text` au coach. `onText(texteCumulé)` est appelé au fil de la réponse.
 export async function ask(text, context, onText) {
   let chat = loadChat();
-  if (!chat?.messages?.length) chat = { context, model: getModel(), createdAt: Date.now(), messages: [] };
+  if (!chat?.messages?.length) {
+    chat = { context, model: getModel(), createdAt: Date.now(), messages: [] };
+  }
+  // consignes figées au début de la conversation : une mise à jour de l'appli ne change pas son début
+  chat.system ??= chat.messages.length ? null : [...systemFor(chat.context), { type: 'text', text: CHAT_RULES }];
   chat.messages.push({ role: 'user', content: text });
   saveChat(chat);
   try {
     // une conversation garde le modèle avec lequel elle a commencé
     const final = await streamClaude({
       model: chat.model || MODELS[0].id,
-      system: [...systemFor(chat.context), { type: 'text', text: CHAT_RULES }],
+      system: chat.system || [...systemFor(chat.context), { type: 'text', text: CHAT_RULES }],
       messages: chat.messages,
+      keepThinking: true,
     }, partial => onText(stripMemory(partial)));
     // on renvoie le contenu complet (y compris les blocs de réflexion et de mémoire) aux tours suivants
     chat.messages.push({ role: 'assistant', content: final.content });
