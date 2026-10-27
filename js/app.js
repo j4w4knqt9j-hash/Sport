@@ -44,6 +44,7 @@ const state = {
   nextOpts: {},
   planCount: {},
   fallback: null,
+  sendError: null,
 };
 
 let charts = [];
@@ -833,6 +834,7 @@ function nextKey(sport, acts) {
 function openSheet(sheet) {
   state.sheet = sheet;
   state.fallback = null;
+  state.sendError = null;
   document.body.classList.add('no-scroll');
   renderSheet();
 }
@@ -1027,6 +1029,10 @@ function watchSteps(w, sport) {
     </div>`).join('')}</div>`;
 }
 
+function sendErrorBlock() {
+  return state.sendError ? `<div class="send-error"><strong>Échec de l'envoi</strong><p>${esc(state.sendError)}</p></div>` : '';
+}
+
 function fallbackBlock() {
   const f = state.fallback;
   if (!f) return '';
@@ -1051,7 +1057,7 @@ function watchBlock(sport, date) {
   const btn = Icu.getKey()
     ? `<button class="btn ghost" data-sheet="send-session" ${state.busy ? 'disabled' : ''}>⌚ ${sent ? 'Renvoyer' : 'Envoyer'} sur ma montre</button>`
     : '<button class="btn ghost" data-sheet="settings">⌚ Envoyer sur ma montre : ajoute ta clé Intervals.icu</button>';
-  return `<div class="watch">${head}${btn}${state.fallback?.sheet === 'next' ? fallbackBlock() : ''}</div>`;
+  return `<div class="watch">${head}${btn}${state.sheet?.type === 'next' ? sendErrorBlock() : ''}${state.fallback?.sheet === 'next' ? fallbackBlock() : ''}</div>`;
 }
 
 function weekWatchBlock(st) {
@@ -1061,7 +1067,7 @@ function weekWatchBlock(st) {
   const btn = Icu.getKey()
     ? `<button class="btn primary" data-sheet="send-week" ${state.busy ? 'disabled' : ''}>⌚ Envoyer les ${todo.length} séance${todo.length > 1 ? 's' : ''} à venir sur ma montre</button>`
     : '<button class="btn ghost" data-sheet="settings">⌚ Envoyer sur ma montre : ajoute ta clé Intervals.icu</button>';
-  return btn + (state.fallback?.sheet === 'plan' ? fallbackBlock() : '');
+  return btn + (state.sheet?.type === 'plan' ? sendErrorBlock() : '') + (state.fallback?.sheet === 'plan' ? fallbackBlock() : '');
 }
 
 async function sendSession(sport) {
@@ -1074,6 +1080,7 @@ async function sendSession(sport) {
   const id = Icu.externalId(date, sport);
   state.busy = { kind: 'send', sport };
   state.fallback = null;
+  state.sendError = null;
   renderSheet();
   try {
     const w = await Coach.structureSession(sport, c.text, coachContext(acts));
@@ -1081,14 +1088,14 @@ async function sendSession(sport) {
     try {
       await Icu.pushEvents([Icu.makeEvent({ date, sport, name: w.name, text, minutes: w.minutes, externalId: id })]);
       Icu.markSent(id, { workout: w, direct: true });
-      toast('Séance envoyée : synchronise ta montre');
+      toast(`Séance ajoutée dans Intervals.icu le ${fmtActivityDate(`${date}T00:00`).split(' · ')[0]}`);
     } catch (e) {
       if (!(e instanceof Icu.BrowserBlockedError)) throw e;
       Icu.markSent(id, { workout: w, direct: false });
       state.fallback = { sheet: 'next', items: [{ title: w.name, when: fmtActivityDate(`${date}T00:00`).split(' · ')[0], text }] };
     }
   } catch (e) {
-    toast(e.message);
+    state.sendError = e.message;
   } finally {
     state.busy = null;
     renderSheet();
@@ -1106,6 +1113,7 @@ async function sendWeek() {
   if (!items.length) return;
   state.busy = { kind: 'send-week' };
   state.fallback = null;
+  state.sendError = null;
   renderSheet();
   try {
     const details = await Coach.structureWeek(items, planSituation(acts, false, w, planCount(acts, w)), coachContext(acts));
@@ -1129,7 +1137,7 @@ async function sendWeek() {
       };
     }
   } catch (e) {
-    toast(e.message);
+    state.sendError = e.message;
   } finally {
     state.busy = null;
     renderSheet();
@@ -1364,6 +1372,8 @@ function renderSettings() {
       <h2>Montre Garmin (Intervals.icu)</h2>
       <label class="field"><span>Clé API Intervals.icu</span><input id="icu-key" type="password" autocomplete="off" value="${esc(Icu.getKey())}"></label>
       <button class="btn primary" data-action="save-icu">Enregistrer</button>
+      <button class="btn ghost" data-action="test-icu">Tester la connexion</button>
+      <div id="icu-test" class="muted" style="margin-top:8px"></div>
       <ol class="steps" style="margin-top:12px">
         <li>Crée un compte gratuit sur <code>intervals.icu</code>.</li>
         <li>Settings → <b>Garmin Connect</b> : connecte ton compte et active l'envoi des séances planifiées (« Upload planned workouts »).</li>
@@ -1542,6 +1552,14 @@ $view.addEventListener('click', e => {
     if (state.coachBusy || !confirm('Commencer une nouvelle conversation avec des stats à jour ?')) return;
     Coach.resetChat();
     render();
+  }
+  else if (d.action === 'test-icu') {
+    Icu.setKey(document.getElementById('icu-key').value);
+    const out = document.getElementById('icu-test');
+    out.textContent = 'Test en cours…';
+    Icu.testConnection()
+      .then(name => { out.innerHTML = `<span style="color:${cssVar('--good')}">✓ Connecté à Intervals.icu : ${esc(String(name))}</span>`; })
+      .catch(e => { out.innerHTML = `<span style="color:${cssVar('--bad')}">✗ ${esc(e.message)}</span>`; });
   }
   else if (d.action === 'save-icu') {
     Icu.setKey(document.getElementById('icu-key').value);

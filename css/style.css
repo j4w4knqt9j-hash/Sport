@@ -460,3 +460,7 @@ body.no-scroll { overflow: hidden; }
 .fb-item { margin-top: 12px; }
 .fb-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
 .fb-item textarea { width: 100%; font: 12px/1.4 ui-monospace, Menlo, monospace; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 8px; resize: vertical; }
+
+.send-error { margin-top: 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.send-error strong { color: var(--bad); }
+.send-error p { margin: 4px 0 0; font-size: 13px; overflow-wrap: anywhere; }

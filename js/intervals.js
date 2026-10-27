@@ -85,22 +85,36 @@ function authHeader() {
   return 'Basic ' + btoa(`API_KEY:${getKey()}`);
 }
 
-// Crée ou remplace (même external_id) des séances planifiées dans le calendrier
-export async function pushEvents(events) {
+async function call(path, options = {}) {
   let res;
   try {
-    res = await fetch(`${API}/athlete/0/events/bulk?upsert=true`, {
-      method: 'POST',
-      headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
-      body: JSON.stringify(events),
+    res = await fetch(`${API}${path}`, {
+      ...options,
+      headers: { Authorization: authHeader(), 'Content-Type': 'application/json', ...(options.headers || {}) },
     });
   } catch {
     // le navigateur a bloqué l'appel (accès depuis une page web refusé) ou pas de réseau
-    throw new BrowserBlockedError('Envoi direct impossible depuis l\'appli');
+    throw new BrowserBlockedError('Le navigateur a bloqué l\'appel à Intervals.icu (ou pas de connexion).');
   }
-  if (res.status === 401 || res.status === 403) throw new Error('Clé Intervals.icu refusée. Vérifie-la dans les Réglages.');
-  if (!res.ok) throw new Error(`Erreur Intervals.icu (${res.status})`);
-  return res.json();
+  const body = await res.text();
+  if (res.status === 401 || res.status === 403) throw new Error(`Clé Intervals.icu refusée (${res.status}). Vérifie-la dans les Réglages.`);
+  if (!res.ok) throw new Error(`Erreur Intervals.icu ${res.status} : ${body.slice(0, 200) || 'pas de détail'}`);
+  try { return JSON.parse(body); } catch { return body; }
+}
+
+// Vérifie la clé : renvoie le nom de l'athlète
+export async function testConnection() {
+  const a = await call('/athlete/0');
+  return [a.firstname, a.lastname].filter(Boolean).join(' ') || a.name || a.id || 'compte trouvé';
+}
+
+// Crée ou remplace (même external_id) des séances planifiées dans le calendrier
+export async function pushEvents(events) {
+  const saved = await call('/athlete/0/events/bulk?upsert=true', { method: 'POST', body: JSON.stringify(events) });
+  if (!Array.isArray(saved) || saved.length < events.length) {
+    throw new Error(`Intervals.icu a répondu sans enregistrer les séances : ${JSON.stringify(saved).slice(0, 200)}`);
+  }
+  return saved;
 }
 
 export function makeEvent({ date, sport, name, text, minutes, externalId }) {
