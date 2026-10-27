@@ -1022,8 +1022,10 @@ function sentBadge(sent) {
   return `<div class="plan-sent">⌚ ${sent.direct ? 'Envoyée sur la montre' : 'Préparée (à coller dans Intervals.icu)'}</div>`;
 }
 
-function watchSteps(w, sport) {
-  return `<div class="steps-preview">${w.blocks.map(b => `
+function watchSteps(w, sport, pauses) {
+  const pause = '<div class="sp-pause">⏸ Pause libre : appuie sur Lap pour repartir</div>';
+  return `<div class="steps-preview">${w.blocks.map((b, i) => `
+    ${pauses && i > 0 ? pause : ''}
     <div class="sp-block"><b>${esc(b.label)}${b.repeat > 1 ? ` · ${b.repeat}×` : ''}</b>
       <ul>${b.steps.map(st => `<li class="${st.kind}">${esc(Icu.stepLabel(st, sport))}</li>`).join('')}</ul>
     </div>`).join('')}</div>`;
@@ -1052,7 +1054,7 @@ function watchBlock(sport, date) {
   if (state.busy?.kind === 'send' && state.busy.sport === sport) return typing('Préparation des étapes pour la montre…');
   const sent = Icu.getSent(Icu.externalId(date, sport));
   const head = sent
-    ? `<div class="sent-ok">⌚ Envoyée le ${new Date(sent.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}${sent.direct ? '' : ' (copie manuelle)'}</div>${sent.workout ? watchSteps(sent.workout, sport) : ''}`
+    ? `<div class="sent-ok">⌚ Envoyée le ${new Date(sent.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}${sent.direct ? '' : ' (copie manuelle)'}</div>${sent.workout ? watchSteps(sent.workout, sport, sent.pauses ?? false) : ''}`
     : '';
   const btn = Icu.getKey()
     ? `<button class="btn ghost" data-sheet="send-session" ${state.busy ? 'disabled' : ''}>⌚ ${sent ? 'Renvoyer' : 'Envoyer'} sur ma montre</button>`
@@ -1087,11 +1089,11 @@ async function sendSession(sport) {
     const text = Icu.workoutText(w, sport);
     try {
       await Icu.pushEvents([Icu.makeEvent({ date, sport, name: w.name, text, minutes: w.minutes, externalId: id })]);
-      Icu.markSent(id, { workout: w, direct: true });
+      Icu.markSent(id, { workout: w, direct: true, pauses: Icu.getPauses() });
       toast(`Séance ajoutée dans Intervals.icu le ${fmtActivityDate(`${date}T00:00`).split(' · ')[0]}`);
     } catch (e) {
       if (!(e instanceof Icu.BrowserBlockedError)) throw e;
-      Icu.markSent(id, { workout: w, direct: false });
+      Icu.markSent(id, { workout: w, direct: false, pauses: Icu.getPauses() });
       state.fallback = { sheet: 'next', items: [{ title: w.name, when: fmtActivityDate(`${date}T00:00`).split(' · ')[0], text }] };
     }
   } catch (e) {
@@ -1126,11 +1128,11 @@ async function sendWeek() {
       });
     try {
       await Icu.pushEvents(prepared.map(x => Icu.makeEvent({ date: x.date, sport: x.item.sport, name: x.d.name, text: x.text, minutes: x.d.minutes, externalId: x.id })));
-      prepared.forEach(x => Icu.markSent(x.id, { workout: x.d, direct: true }));
+      prepared.forEach(x => Icu.markSent(x.id, { workout: x.d, direct: true, pauses: Icu.getPauses() }));
       toast(`${prepared.length} séance${prepared.length > 1 ? 's' : ''} envoyée${prepared.length > 1 ? 's' : ''} : synchronise ta montre`);
     } catch (e) {
       if (!(e instanceof Icu.BrowserBlockedError)) throw e;
-      prepared.forEach(x => Icu.markSent(x.id, { workout: x.d, direct: false }));
+      prepared.forEach(x => Icu.markSent(x.id, { workout: x.d, direct: false, pauses: Icu.getPauses() }));
       state.fallback = {
         sheet: 'plan',
         items: prepared.map(x => ({ title: `${SPORTS[x.item.sport].icon} ${x.d.name}`, when: fmtActivityDate(`${x.date}T00:00`).split(' · ')[0], text: x.text })),
@@ -1373,6 +1375,10 @@ function renderSettings() {
       <label class="field"><span>Clé API Intervals.icu</span><input id="icu-key" type="password" autocomplete="off" value="${esc(Icu.getKey())}"></label>
       <button class="btn primary" data-action="save-icu">Enregistrer</button>
       <button class="btn ghost" data-action="test-icu">Tester la connexion</button>
+      <div class="switch-row" style="margin-top:14px">
+        <div><strong>Pause entre les blocs</strong><small>Pause libre (non chronométrée) entre échauffement, corps de séance et retour au calme : la montre attend un appui sur Lap.</small></div>
+        <label class="switch"><input type="checkbox" id="lap-pauses" ${Icu.getPauses() ? 'checked' : ''}><i></i></label>
+      </div>
       <div id="icu-test" class="muted" style="margin-top:8px"></div>
       <ol class="steps" style="margin-top:12px">
         <li>Crée un compte gratuit sur <code>intervals.icu</code>.</li>
@@ -1601,6 +1607,11 @@ $view.addEventListener('input', e => {
 });
 
 $view.addEventListener('change', e => {
+  if (e.target.id === 'lap-pauses') {
+    Icu.setPauses(e.target.checked);
+    toast(e.target.checked ? 'Pauses entre les blocs activées' : 'Pauses entre les blocs désactivées');
+    return;
+  }
   if (e.target.id === 'tolerance') {
     savePrefs({ tolerance: Number(e.target.value) });
     render();

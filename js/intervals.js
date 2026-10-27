@@ -3,6 +3,16 @@
 
 const API = 'https://intervals.icu/api/v1';
 const KEY = 'trisuivi.intervalsKey';
+const PAUSE_KEY = 'trisuivi.lapPauses';
+
+// Pause non chronométrée entre les blocs (la montre attend un appui sur Lap) : activée par défaut
+export function getPauses() {
+  try { return localStorage.getItem(PAUSE_KEY) !== 'off'; } catch { return true; }
+}
+
+export function setPauses(on) {
+  localStorage.setItem(PAUSE_KEY, on ? 'on' : 'off');
+}
 
 export const ICU_TYPE = { run: 'Run', ride: 'Ride', swim: 'Swim' };
 
@@ -51,14 +61,18 @@ function stepLine(st, sport) {
 }
 
 // Convertit la séance structurée par Claude en texte de séance Intervals.icu
-export function workoutText(w, sport) {
+export function workoutText(w, sport, pauses = getPauses()) {
   const out = [];
-  for (const b of w.blocks) {
+  w.blocks.forEach((b, i) => {
+    if (pauses && i > 0) {
+      // étape ouverte : la durée ne sert qu'au calcul de la durée prévue, la montre attend un appui sur Lap
+      out.push('Pause', '- Press lap 1m intensity=rest', '');
+    }
     const label = (b.label || '').replace(/\d+\s*x/gi, '').trim() || 'Bloc';
     out.push(b.repeat > 1 ? `${label} ${b.repeat}x` : label);
     for (const st of b.steps) out.push(stepLine(st, sport));
     out.push('');
-  }
+  });
   return out.join('\n').trim();
 }
 

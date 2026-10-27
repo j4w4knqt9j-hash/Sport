@@ -464,3 +464,5 @@ body.no-scroll { overflow: hidden; }
 .send-error { margin-top: 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
 .send-error strong { color: var(--bad); }
 .send-error p { margin: 4px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+
+.sp-pause { margin: 8px 0; padding: 4px 8px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface-2); text-align: center; }
