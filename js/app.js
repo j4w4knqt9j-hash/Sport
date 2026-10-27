@@ -1367,6 +1367,11 @@ function memoryFlash() {
   ].join('<br>')}</div>`;
 }
 
+function scrollChatToEnd() {
+  // après la mise en page (deux images pour laisser le navigateur calculer la hauteur)
+  requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo(0, document.body.scrollHeight)));
+}
+
 function renderCoach() {
   if (!Coach.getApiKey()) {
     $view.innerHTML = `
@@ -1406,7 +1411,7 @@ function renderCoach() {
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
       </button>
     </form>`;
-  window.scrollTo(0, document.body.scrollHeight);
+  scrollChatToEnd();
 }
 
 function coachContext(acts) {
@@ -1684,7 +1689,9 @@ document.querySelector('.tabbar').addEventListener('click', e => {
   state.view = b.dataset.view;
   state.detailId = null;
   render();
-  window.scrollTo(0, 0);
+  // le chat s'ouvre sur le dernier message, les autres onglets en haut
+  if (state.view === 'coach') scrollChatToEnd();
+  else window.scrollTo(0, 0);
 });
 
 document.getElementById('sync-btn').addEventListener('click', () => sync());
