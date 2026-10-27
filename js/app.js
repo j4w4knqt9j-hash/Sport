@@ -37,6 +37,9 @@ const state = {
   detailLoading: null,
   aiBusy: null,
   aiPartial: '',
+  nextSport: null,
+  nextBusy: null,
+  nextPartial: '',
 };
 
 let charts = [];
@@ -143,7 +146,7 @@ function renderWeek(acts) {
     const prevTxt = p.count ? `${fmtDuration(p.time)} · ${fmtDistance(p.distance, s)}` : 'rien';
     const avgTxt = avg[s].time ? ` · moy. 4 sem. ${fmtDuration(avg[s].time)}` : '';
     return `
-      <div class="card sport-card">
+      <div class="card sport-card" data-next="${s}">
         ${iconBox(s)}
         <div>
           <div class="name">${SPORTS[s].label}</div>
@@ -156,6 +159,7 @@ function renderWeek(acts) {
         <div class="bar"><i style="width:${Math.min(100, pct ?? 0)}%;background:${SPORTS[s].color}"></i></div>
         <div class="bar-caption">Sem. ${isCurrent ? 'dernière' : 'précédente'} : ${prevTxt}${avgTxt}</div>
         ${sportGoal(acts, s, t, p, monday, isCurrent)}
+        <div class="next-cta">✨ Prochaine séance conseillée <span>›</span></div>
       </div>`;
   }).join('');
 
@@ -638,6 +642,142 @@ async function loadStreams(a) {
   }
 }
 
+// ---------- Prochaine séance (fenêtre) ----------
+
+// Résumé de la situation dans un sport, pour la suggestion de l'IA
+function nextSituation(acts, sport) {
+  const monday = currentMonday(0);
+  const cur = weekTotals(acts, isoDay(monday));
+  const prev = weekTotals(acts, isoDay(addDays(monday, -7)));
+  const label = SPORTS[sport].label;
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const daysAgo = a => {
+    const n = Math.round((today - new Date(a.local.slice(0, 10) + 'T00:00:00Z')) / 864e5);
+    return n === 0 ? 'aujourd\'hui' : n === 1 ? 'hier' : `il y a ${n} j`;
+  };
+  const dayIndex = (today.getUTCDay() + 6) % 7 + 1;
+  const sorted = [...acts].sort((a, b) => b.local.localeCompare(a.local));
+  const lines = [
+    `Sport demandé : ${label}`,
+    `Aujourd'hui : ${today.toLocaleDateString('fr-FR', { weekday: 'long', timeZone: 'UTC' })}, jour ${dayIndex}/7 de la semaine en cours.`,
+    `Cette semaine en ${label.toLowerCase()} : ${cur[sport].count} séance(s), ${fmtDistance(cur[sport].distance, sport)}, ${fmtDuration(cur[sport].time)} (semaine dernière : ${prev[sport].count} séance(s), ${fmtDuration(prev[sport].time)}).`,
+    `Cette semaine tous sports : ${fmtDuration(cur.all.time)} (semaine dernière : ${fmtDuration(prev.all.time)}).`,
+  ];
+  const load = loadRatio(acts, monday);
+  if (load) lines.push(`Effort relatif cumulé cette semaine : ${Math.round(load.cur)} (moyenne des 4 semaines précédentes : ${Math.round(load.prev)} par semaine complète ; semaine en cours, jour ${dayIndex}/7).`);
+  const speed = averageSpeed(acts, sport, monday);
+  if (speed) lines.push(`Allure moyenne récente en ${label.toLowerCase()} : ${fmtPaceValue(paceValue(speed, sport), sport)}.`);
+  const lastSport = sorted.filter(a => a.sport === sport).slice(0, 3);
+  if (lastSport.length) {
+    lines.push(`Dernières séances de ${label.toLowerCase()} :`);
+    lastSport.forEach(a => lines.push(`- ${daysAgo(a)} : « ${a.name.slice(0, 60)} », ${fmtDistance(a.distance, sport)} en ${fmtDuration(a.time)}${a.pace ? `, ${fmtPace(a.pace.distance, a.pace.time, sport)}` : ''}${a.effort != null ? `, effort ${a.effort}` : ''}`));
+  } else {
+    lines.push(`Aucune séance de ${label.toLowerCase()} depuis septembre.`);
+  }
+  const last = sorted[0];
+  if (last) lines.push(`Dernière séance tous sports : ${SPORTS[last.sport].label.toLowerCase()} ${daysAgo(last)}${last.effort != null ? ` (effort ${last.effort})` : ''}.`);
+  return lines.join('\n');
+}
+
+function nextStamp(acts) {
+  const latest = acts.reduce((m, a) => (a.local > m ? a.local : m), '');
+  return `${isoDay(currentMonday(0))}|${new Date().toDateString()}|${latest}|${acts.length}`;
+}
+
+function openNext(sport) {
+  state.nextSport = sport;
+  document.body.classList.add('no-scroll');
+  renderSheet();
+  const acts = activities();
+  if (Coach.getApiKey() && !state.nextBusy && !Coach.cachedNext(sport, nextStamp(acts))) runNext();
+}
+
+function closeNext() {
+  state.nextSport = null;
+  document.body.classList.remove('no-scroll');
+  document.getElementById('sheet')?.remove();
+}
+
+function renderSheet() {
+  const sport = state.nextSport;
+  if (!sport) return;
+  let el = document.getElementById('sheet');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'sheet';
+    el.className = 'sheet-backdrop';
+    document.body.appendChild(el);
+  }
+  let body;
+  if (!Coach.getApiKey()) {
+    body = `<p class="muted">Ajoute ta clé API Anthropic pour que le coach te propose tes séances.</p>
+      <button class="btn primary" data-sheet="settings">Aller aux réglages</button>`;
+  } else if (state.nextBusy === sport) {
+    body = `<div id="next-body" class="ai-text">${state.nextPartial ? Coach.renderMarkdown(state.nextPartial) : '<p class="muted">Le coach prépare ta séance…</p><div class="msg typing"><i></i><i></i><i></i></div>'}</div>`;
+  } else {
+    const c = Coach.cachedNext(sport, nextStamp(activities()));
+    body = c
+      ? `<div class="ai-text">${Coach.renderMarkdown(c.text)}</div>
+         <div class="ai-foot">
+           <span class="muted">${esc(Coach.modelLabel(c.model))} · ${new Date(c.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span>
+           <button class="link" data-sheet="regen">Autre proposition</button>
+         </div>`
+      : `<p class="muted">${state.nextBusy ? 'Une autre suggestion est en cours…' : 'Pas encore de suggestion.'}</p>
+         <button class="btn primary" data-sheet="regen" ${state.nextBusy ? 'disabled' : ''}>✨ Proposer une séance</button>`;
+  }
+  el.innerHTML = `
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Prochaine séance">
+      <div class="sheet-head">
+        ${iconBox(sport)}
+        <div><span class="muted">Prochaine séance</span><strong>${SPORTS[sport].label}</strong></div>
+        <button class="icon-btn" data-sheet="close" aria-label="Fermer">✕</button>
+      </div>
+      <div class="sheet-body">${body}</div>
+    </div>`;
+}
+
+async function runNext() {
+  const sport = state.nextSport;
+  if (!sport || state.nextBusy) return;
+  const acts = activities();
+  state.nextBusy = sport;
+  state.nextPartial = '';
+  renderSheet();
+  try {
+    await Coach.suggestNext(sport, nextSituation(acts, sport), coachContext(acts), nextStamp(acts), partial => {
+      state.nextPartial = partial;
+      const el = document.getElementById('next-body');
+      if (el && state.nextSport === sport) el.innerHTML = Coach.renderMarkdown(partial);
+    });
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    state.nextBusy = null;
+    state.nextPartial = '';
+    renderSheet();
+  }
+}
+
+document.addEventListener('click', e => {
+  const sheet = document.getElementById('sheet');
+  if (!sheet || !sheet.contains(e.target)) return;
+  const b = e.target.closest('[data-sheet]');
+  if (e.target === sheet || b?.dataset.sheet === 'close') return closeNext();
+  if (!b) return;
+  if (b.dataset.sheet === 'regen') runNext();
+  else if (b.dataset.sheet === 'settings') {
+    closeNext();
+    state.view = 'settings';
+    state.detailId = null;
+    render();
+  }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && state.nextSport) closeNext();
+});
+
 // ---------- Vue Coach ----------
 
 function renderCoach() {
@@ -895,6 +1035,8 @@ document.getElementById('sync-btn').addEventListener('click', () => sync());
 $view.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) {
+    const card = e.target.closest('.sport-card[data-next]');
+    if (card) return openNext(card.dataset.next);
     const row = e.target.closest('.act[data-open]');
     if (row) {
       state.listScroll = window.scrollY;

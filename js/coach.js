@@ -240,11 +240,11 @@ export function describeActivity(act, splits, insights, splitLabel) {
 
 const ANALYSIS_PROMPT = `Analyse cette sortie en t'appuyant sur ses tronçons, sa fréquence cardiaque et la comparaison avec mes autres séances (données plus haut).
 
-Réponds avec ces quatre parties, courtes :
+Réponds avec ces trois parties, courtes :
 **En bref** : une ou deux phrases.
 **Points forts** : 2 ou 3 puces.
 **À améliorer** : 1 ou 2 puces.
-**Prochaine séance** : un conseil concret pour ma prochaine sortie dans ce sport (durée, allure ou intensité).`;
+Ne propose pas de prochaine séance : l'appli a un écran dédié pour ça.`;
 
 export async function analyseActivity(act, description, context, onText) {
   const model = getModel();
@@ -255,6 +255,53 @@ export async function analyseActivity(act, description, context, onText) {
   }, onText);
   const result = { text: messageText(final), model, at: Date.now() };
   try { localStorage.setItem(AI_KEY + act.id, JSON.stringify(result)); } catch { /* stockage plein */ }
+  return result;
+}
+
+// ---------- Prochaine séance conseillée ----------
+
+const NEXT_KEY = 'trisuivi.next.';
+
+// `stamp` change dès qu'une nouvelle activité arrive ou que le jour change :
+// la suggestion en cache n'est alors plus proposée.
+export function cachedNext(sport, stamp) {
+  try {
+    const c = JSON.parse(localStorage.getItem(NEXT_KEY + sport));
+    return c && c.stamp === stamp ? c : null;
+  } catch { return null; }
+}
+
+function nextPrompt(sport, situation) {
+  const label = SPORTS[sport].label.toLowerCase();
+  return `Propose ma prochaine séance de ${label}, à faire aujourd'hui ou demain.
+Tiens compte de ma situation ci-dessous, de mes séances récentes dans les trois sports (récupération, charge), de mes allures réelles et de mon objectif.
+
+# Situation
+
+${situation}
+
+Réponds uniquement avec ce format :
+### Titre court de la séance
+**Durée** : … · **Distance** : … (estimations)
+**Objectif** : une phrase.
+**Déroulé** :
+- Échauffement : …
+- Corps de séance : … (allures ou intensités chiffrées à partir de mes allures habituelles${sport === 'swim' ? ', séries en mètres avec récupération' : ''})
+- Retour au calme : …
+**Pourquoi maintenant** : une ou deux phrases.
+
+Si un jour de repos est plus judicieux, dis-le d'abord en une phrase, puis donne quand même la séance pour le jour suivant.`;
+}
+
+export async function suggestNext(sport, situation, context, stamp, onText) {
+  const model = getModel();
+  const final = await streamClaude({
+    model,
+    system: systemFor(context),
+    messages: [{ role: 'user', content: nextPrompt(sport, situation) }],
+  }, onText);
+  const result = { text: messageText(final), model, at: Date.now(), stamp };
+  try { localStorage.setItem(NEXT_KEY + sport, JSON.stringify(result)); } catch { /* stockage plein */ }
   return result;
 }
 

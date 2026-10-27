@@ -382,3 +382,32 @@ table.splits tr.flag td { color: var(--warn); }
 .ai-text .msg.typing { padding: 4px 0; background: none; border: 0; }
 .ai-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
 .btn:disabled { opacity: 0.5; }
+
+/* ---------- Prochaine séance ---------- */
+.sport-card[data-next] { cursor: pointer; }
+.next-cta { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px; font-weight: 700; color: var(--accent); }
+.next-cta span { font-size: 18px; line-height: 1; }
+body.no-scroll { overflow: hidden; }
+.sheet-backdrop {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: flex-end; justify-content: center;
+  animation: fade 0.2s ease;
+}
+.sheet {
+  width: 100%; max-width: 560px;
+  max-height: 88vh;
+  display: flex; flex-direction: column;
+  background: var(--bg);
+  border-radius: 22px 22px 0 0;
+  padding: 8px 16px calc(16px + env(safe-area-inset-bottom));
+  animation: slide-up 0.25s ease;
+}
+.sheet::before { content: ""; display: block; width: 40px; height: 5px; border-radius: 99px; background: var(--border); margin: 0 auto 10px; }
+.sheet-head { display: grid; grid-template-columns: 44px 1fr 40px; gap: 12px; align-items: center; margin-bottom: 12px; }
+.sheet-head span { display: block; font-size: 12px; }
+.sheet-head strong { font-size: 20px; }
+.sheet-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.sheet-body h4 { font-size: 18px; margin: 4px 0 10px; }
+@keyframes fade { from { opacity: 0; } }
+@keyframes slide-up { from { transform: translateY(40px); opacity: 0; } }
