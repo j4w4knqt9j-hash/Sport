@@ -505,3 +505,9 @@ body.no-scroll { overflow: hidden; }
 .pin-add { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 4px; }
 .pin-add select { padding: 9px 8px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 14px; min-width: 0; }
 .pin-add .btn { grid-column: 1 / -1; margin-top: 0; padding: 10px; }
+
+/* ---------- Mémoire du coach ---------- */
+.mem-flash { align-self: flex-start; max-width: 88%; font-size: 12px; color: var(--muted); padding: 6px 10px; border-radius: 10px; border: 1px dashed var(--border); cursor: pointer; }
+.mem-list { display: flex; flex-direction: column; gap: 6px; }
+.mem-note { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); font-size: 14px; }
+.mem-note small { display: block; color: var(--muted); font-size: 11px; }

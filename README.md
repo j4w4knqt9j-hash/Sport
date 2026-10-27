@@ -6,6 +6,7 @@ Appli mobile (PWA) pour suivre son entraînement en **natation, vélo et course 
 - **Progrès** : meilleure allure, plus longue sortie, cumul annuel, tendance et courbe d'allure par sortie.
 - **Sorties** : liste des activités par semaine, filtrable par sport.
 - **Coach** : chat avec Claude (Anthropic), qui reçoit le résumé de tes semaines et de tes sorties pour analyser ton entraînement et proposer des séances. Nécessite une clé API Anthropic (Réglages → Coach), facturée à l'usage sur console.anthropic.com.
+- **Mémoire du coach** : pendant le chat, le coach note les informations durables (douleurs, disponibilités, préférences…). Ces notes, modifiables dans les Réglages, sont transmises à toutes les fonctions IA (chat, programme, prochaine séance, analyses).
 - **Montre Garmin** : les séances proposées par le coach (une seule ou toute la semaine) sont découpées en étapes (échauffement, répétitions, cibles d'allure ou de zone FC, repos en natation) et envoyées sur Intervals.icu, qui les transmet à Garmin Connect puis à la montre. Nécessite un compte Intervals.icu relié à Garmin et sa clé API (Réglages → Montre Garmin). Si l'envoi direct est bloqué, l'appli affiche les séances prêtes à coller dans Intervals.icu.
 - **Mode démo** pour tester sans compte Strava.
 

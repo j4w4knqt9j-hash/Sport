@@ -1355,6 +1355,16 @@ document.addEventListener('keydown', e => {
 
 // ---------- Vue Coach ----------
 
+// Ce que le coach vient de retenir ou d'oublier, affiché sous sa dernière réponse
+function memoryFlash() {
+  const f = state.memoryFlash;
+  if (!f || (!f.added.length && !f.removed.length)) return '';
+  return `<div class="mem-flash" data-goto="settings">🧠 ${[
+    ...f.added.map(n => `Noté : ${esc(n.text)}`),
+    ...(f.removed.length ? [`${f.removed.length} note${f.removed.length > 1 ? 's' : ''} retirée${f.removed.length > 1 ? 's' : ''}`] : []),
+  ].join('<br>')}</div>`;
+}
+
 function renderCoach() {
   if (!Coach.getApiKey()) {
     $view.innerHTML = `
@@ -1387,7 +1397,7 @@ function renderCoach() {
           ${Coach.SUGGESTIONS.map(q => `<button data-ask="${esc(q)}">${esc(q)}</button>`).join('')}
         </div>
       </div>`}
-    <div class="chat" id="chat">${bubbles}</div>
+    <div class="chat" id="chat">${bubbles}${memoryFlash()}</div>
     <form class="composer" id="composer">
       <textarea id="coach-input" rows="1" placeholder="Écris ta question…" ${state.coachBusy ? 'disabled' : ''}></textarea>
       <button type="submit" class="send" aria-label="Envoyer" ${state.coachBusy ? 'disabled' : ''}>
@@ -1418,11 +1428,13 @@ async function sendCoach(text) {
   const bot = chatEl.lastElementChild;
   window.scrollTo(0, document.body.scrollHeight);
   try {
-    await Coach.ask(text, context, partial => {
+    state.memoryFlash = null;
+    const res = await Coach.ask(text, context, partial => {
       bot.classList.remove('typing');
       bot.innerHTML = Coach.renderMarkdown(partial);
       window.scrollTo(0, document.body.scrollHeight);
     });
+    state.memoryFlash = res.memory;
   } catch (e) {
     toast(e.message);
   } finally {
@@ -1474,6 +1486,17 @@ function renderSettings() {
         <li>Copie le Client ID et le Client Secret ci-dessus, puis connecte-toi.</li>
       </ol>
     </div>`}
+
+    <div class="card">
+      <h2>Mémoire du coach</h2>
+      <p class="muted" style="margin-top:0">Ce que le coach retient de vos conversations. Ces notes sont utilisées partout : chat, programme, prochaine séance, analyses.</p>
+      ${Coach.getMemory().length ? `<div class="mem-list">${Coach.getMemory().map(n => `
+        <div class="mem-note"><span>${esc(n.text)}<small>${new Date(n.at).toLocaleDateString('fr-FR')}</small></span>
+          <button class="link" data-action="del-note" data-id="${esc(n.id)}">Retirer</button></div>`).join('')}</div>`
+        : '<p class="muted">Aucune note pour l\'instant.</p>'}
+      <label class="field" style="margin-top:10px"><span>Ajouter une note</span><input id="new-note" autocomplete="off" placeholder="Ex. : pas de piscine le jeudi"></label>
+      <button class="btn ghost" data-action="add-note">Ajouter</button>
+    </div>
 
     <div class="card">
       <h2>Coach (Claude)</h2>
@@ -1628,6 +1651,11 @@ document.getElementById('sync-btn').addEventListener('click', () => sync());
 $view.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) {
+    if (e.target.closest('.mem-flash')) {
+      state.view = 'settings';
+      render();
+      return window.scrollTo(0, 0);
+    }
     const doneItem = e.target.closest('[data-cal-act]');
     if (doneItem) {
       state.view = 'list';
@@ -1703,6 +1731,14 @@ $view.addEventListener('click', e => {
   else if (d.action === 'save-icu') {
     Icu.setKey(document.getElementById('icu-key').value);
     toast('Clé Intervals.icu enregistrée');
+  }
+  else if (d.action === 'add-note') {
+    if (!Coach.addNote(document.getElementById('new-note').value)) return toast('Écris une note d\'abord');
+    render();
+  }
+  else if (d.action === 'del-note') {
+    Coach.removeNote(d.id);
+    render();
   }
   else if (d.action === 'save-coach') {
     Coach.setApiKey(document.getElementById('anthropic-key').value);
