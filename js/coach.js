@@ -387,6 +387,109 @@ export async function suggestNext(sport, situation, context, stamp, hasPlan, onT
   return result;
 }
 
+// ---------- Séances structurées pour la montre (Garmin via Intervals.icu) ----------
+
+const STEP_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['kind', 'duration_type', 'duration_s', 'distance_m', 'target_type', 'pace_min_s', 'pace_max_s', 'hr_zone', 'note'],
+  properties: {
+    kind: { type: 'string', enum: ['effort', 'recup', 'repos'], description: 'repos = arrêt complet (natation entre deux séries).' },
+    duration_type: { type: 'string', enum: ['time', 'distance'] },
+    duration_s: { type: 'integer', description: 'Durée en secondes si duration_type = time, sinon 0.' },
+    distance_m: { type: 'integer', description: 'Distance en mètres si duration_type = distance, sinon 0.' },
+    target_type: { type: 'string', enum: ['pace', 'hr_zone', 'none'] },
+    pace_min_s: { type: 'integer', description: 'Course uniquement : allure la plus rapide de la plage, en secondes par km. 0 sinon.' },
+    pace_max_s: { type: 'integer', description: 'Course uniquement : allure la plus lente de la plage, en secondes par km. 0 sinon.' },
+    hr_zone: { type: 'integer', description: 'Zone de FC de 1 à 5 si target_type = hr_zone, sinon 0.' },
+    note: { type: 'string', description: 'Texte court affiché sur la montre, sans chiffres (ex. « Éducatif rattrapé », « Allure seuil »). Vide si inutile.' },
+  },
+};
+
+const WORKOUT_PROPS = {
+  name: { type: 'string', description: 'Nom court de la séance.' },
+  minutes: { type: 'integer', description: 'Durée totale estimée en minutes.' },
+  blocks: {
+    type: 'array',
+    items: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['label', 'repeat', 'steps'],
+      properties: {
+        label: { type: 'string', description: 'Échauffement, Corps de séance, Retour au calme… (sans chiffres).' },
+        repeat: { type: 'integer', description: 'Nombre de répétitions du bloc (1 = pas de répétition).' },
+        steps: { type: 'array', items: STEP_SCHEMA },
+      },
+    },
+  },
+};
+
+const WORKOUT_RULES = `Règles pour les étapes (elles seront envoyées sur une montre Garmin Forerunner 255) :
+- Course : cibles en allure (pace_min_s / pace_max_s en secondes par km, plage de 10 à 20 s) calculées à partir de mes allures réelles ; zones de FC possibles pour l'endurance facile.
+- Vélo : cibles en zone de FC (pas de capteur de puissance), ou aucune cible.
+- Natation (piscine) : étapes en distance (mètres, multiples de 25), séries avec des étapes « repos » en temps entre elles, pas de cible d'allure (la montre les gère mal) ; mets la consigne dans « note ».
+- Une répétition = un bloc avec repeat > 1 (pas de répétitions imbriquées).
+- Échauffement et retour au calme en blocs séparés.`;
+
+async function structured(prompt, schema, context) {
+  const final = await streamClaude({
+    model: getModel(),
+    system: systemFor(context),
+    messages: [{ role: 'user', content: prompt }],
+    format: { type: 'json_schema', schema },
+  }, () => {});
+  try { return JSON.parse(messageText(final)); } catch { throw new Error('Réponse illisible, réessaie.'); }
+}
+
+// Transforme une séance déjà rédigée (texte) en étapes pour la montre
+export function structureSession(sport, sessionText, context) {
+  const label = SPORTS[sport].label.toLowerCase();
+  return structured(`Transforme cette séance de ${label} en étapes structurées pour ma montre, fidèlement (mêmes durées, distances, allures et récupérations).
+
+${WORKOUT_RULES}
+
+# Séance
+
+${sessionText}`, {
+    type: 'object',
+    additionalProperties: false,
+    required: ['name', 'minutes', 'blocks'],
+    properties: WORKOUT_PROPS,
+  }, context);
+}
+
+// Détaille en étapes toutes les séances restantes d'un programme hebdomadaire
+export async function structureWeek(items, situation, context) {
+  const list = items.map((x, i) => `${i + 1}. ${DAYS[x.day]} · ${SPORTS[x.sport].label} · ${x.title} (${x.minutes} min) : ${x.content}${x.detail ? `\n   Séance déjà détaillée, à reprendre fidèlement :\n${x.detail.replace(/^/gm, '   ')}` : ''}`).join('\n');
+  const data = await structured(`Détaille chacune de ces séances de mon programme en étapes structurées pour ma montre, en respectant le thème et la durée prévus.
+
+${WORKOUT_RULES}
+
+# Situation
+
+${situation}
+
+# Séances à détailler (garde le même ordre, une entrée par séance)
+
+${list}`, {
+    type: 'object',
+    additionalProperties: false,
+    required: ['seances'],
+    properties: {
+      seances: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['numero', 'name', 'minutes', 'blocks'],
+          properties: { numero: { type: 'integer', description: 'Numéro de la séance dans la liste.' }, ...WORKOUT_PROPS },
+        },
+      },
+    },
+  }, context);
+  return data.seances;
+}
+
 export function modelLabel(id) {
   return (MODELS.find(m => m.id === id)?.label || id).replace(' (conseillé)', '');
 }

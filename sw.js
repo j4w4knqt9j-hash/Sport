@@ -1,7 +1,7 @@
 // Cache de l'appli pour un démarrage rapide et un usage hors ligne.
 // Les appels à l'API Strava ne sont jamais mis en cache.
 
-const CACHE = 'trisuivi-v9';
+const CACHE = 'trisuivi-v10';
 const SHELL = [
   './',
   'index.html',
@@ -12,6 +12,7 @@ const SHELL = [
   'js/demo.js',
   'js/coach.js',
   'js/detail.js',
+  'js/intervals.js',
   'manifest.webmanifest',
   'icons/icon.svg',
   'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js',

@@ -446,3 +446,17 @@ body.no-scroll { overflow: hidden; }
 .stepper b { font-size: 20px; min-width: 24px; text-align: center; }
 .stepper button { width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface-2); font-size: 20px; line-height: 1; cursor: pointer; }
 .stepper button:disabled { opacity: 0.35; }
+
+/* ---------- Envoi sur la montre ---------- */
+.watch { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.sent-ok { color: var(--good); font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+.plan-sent { font-size: 12px; color: var(--ride); font-weight: 600; margin-top: 2px; }
+.steps-preview { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; font-size: 13px; }
+.sp-block + .sp-block { margin-top: 8px; }
+.sp-block ul { margin: 4px 0 0; padding-left: 18px; }
+.sp-block li.recup, .sp-block li.repos { color: var(--muted); }
+.fallback { margin-top: 12px; padding: 12px; border-radius: 12px; border: 1px solid var(--warn); }
+.fallback > strong { color: var(--warn); }
+.fb-item { margin-top: 12px; }
+.fb-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.fb-item textarea { width: 100%; font: 12px/1.4 ui-monospace, Menlo, monospace; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 8px; resize: vertical; }

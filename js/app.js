@@ -1,6 +1,7 @@
 import * as Strava from './strava.js';
 import { demoActivities, demoSplits } from './demo.js';
 import * as Detail from './detail.js';
+import * as Icu from './intervals.js';
 import * as Coach from './coach.js';
 import {
   SPORTS, SPORT_KEYS, normalize, isoDay, addDays, currentMonday, mondayOf,
@@ -42,6 +43,7 @@ const state = {
   partial: '',
   nextOpts: {},
   planCount: {},
+  fallback: null,
 };
 
 let charts = [];
@@ -830,6 +832,7 @@ function nextKey(sport, acts) {
 
 function openSheet(sheet) {
   state.sheet = sheet;
+  state.fallback = null;
   document.body.classList.add('no-scroll');
   renderSheet();
 }
@@ -930,6 +933,7 @@ function planSheet() {
             <div class="plan-title">${esc(x.title)} <span class="muted">· ${fmtDuration(x.minutes * 60)}</span></div>
             <div class="plan-content">${esc(x.content)}</div>
             ${x.act ? `<div class="plan-real">${fmtDistance(x.act.distance, x.sport)} en ${fmtDuration(x.act.time)}</div>` : ''}
+            ${sentBadge(!x.act && Icu.getSent(Icu.externalId(isoDay(addDays(monday, i)), x.sport)))}
           </div>
           <div class="plan-side">${badge[x.status]}${x.status === 'done' ? '' : '<span class="chev">›</span>'}</div>
         </div>`).join('') + extras.map(a => `
@@ -954,6 +958,7 @@ function planSheet() {
         : `<b>${st.sessions.length}</b> séances prévues`}</div>
       ${days}
       <p class="muted">Touche une séance pour la détailler.</p>
+      ${weekWatchBlock(st)}
       ${stepper}
       ${w === 0 ? `<button class="btn ${changed ? 'ghost' : 'primary'}" data-sheet="adapt-plan" ${busy}>Adapter à ma semaine réelle${changed ? ` (${count} séances)` : ''}</button>` : ''}
       <button class="btn ${changed ? 'primary' : 'ghost'}" data-sheet="gen-plan" ${busy}>Refaire le programme avec ${count} séance${count > 1 ? 's' : ''}</button>
@@ -994,7 +999,8 @@ function nextSheet(sport) {
          <div class="ai-foot">
            <span class="muted">${esc(Coach.modelLabel(c.model))} · ${new Date(c.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span>
            <button class="link" data-sheet="gen-next" ${state.busy ? 'disabled' : ''}>Autre proposition</button>
-         </div>`
+         </div>
+         ${watchBlock(sport, isoDay(addDays(today, o.offset)))}`
       : `<button class="btn primary" data-sheet="gen-next" ${state.busy ? 'disabled' : ''}>✨ Proposer la séance</button>`;
   }
   return sheetFrame(iconBox(sport), 'Prochaine séance', SPORTS[sport].label, `
@@ -1005,6 +1011,129 @@ function nextSheet(sport) {
     <div class="chips">${timeChips}</div>
     ${hint}
     ${body}`);
+}
+
+// ---------- Envoi sur la montre (via Intervals.icu) ----------
+
+function sentBadge(sent) {
+  if (!sent) return '';
+  return `<div class="plan-sent">⌚ ${sent.direct ? 'Envoyée sur la montre' : 'Préparée (à coller dans Intervals.icu)'}</div>`;
+}
+
+function watchSteps(w, sport) {
+  return `<div class="steps-preview">${w.blocks.map(b => `
+    <div class="sp-block"><b>${esc(b.label)}${b.repeat > 1 ? ` · ${b.repeat}×` : ''}</b>
+      <ul>${b.steps.map(st => `<li class="${st.kind}">${esc(Icu.stepLabel(st, sport))}</li>`).join('')}</ul>
+    </div>`).join('')}</div>`;
+}
+
+function fallbackBlock() {
+  const f = state.fallback;
+  if (!f) return '';
+  return `<div class="fallback">
+    <strong>Envoi direct bloqué</strong>
+    <p class="muted">Intervals.icu n'accepte pas l'envoi depuis l'appli. Copie chaque séance, puis dans Intervals.icu : calendrier → le jour → <b>Add → Workout</b> → colle le texte dans la description. Elle partira ensuite sur ta Garmin.</p>
+    ${f.items.map((x, i) => `
+      <div class="fb-item">
+        <div class="fb-head"><b>${esc(x.title)}</b><span class="muted">${esc(x.when)}</span></div>
+        <textarea readonly rows="6">${esc(x.text)}</textarea>
+        <button class="btn ghost" data-sheet="copy" data-i="${i}">Copier</button>
+      </div>`).join('')}
+  </div>`;
+}
+
+function watchBlock(sport, date) {
+  if (state.busy?.kind === 'send' && state.busy.sport === sport) return typing('Préparation des étapes pour la montre…');
+  const sent = Icu.getSent(Icu.externalId(date, sport));
+  const head = sent
+    ? `<div class="sent-ok">⌚ Envoyée le ${new Date(sent.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}${sent.direct ? '' : ' (copie manuelle)'}</div>${sent.workout ? watchSteps(sent.workout, sport) : ''}`
+    : '';
+  const btn = Icu.getKey()
+    ? `<button class="btn ghost" data-sheet="send-session" ${state.busy ? 'disabled' : ''}>⌚ ${sent ? 'Renvoyer' : 'Envoyer'} sur ma montre</button>`
+    : '<button class="btn ghost" data-sheet="settings">⌚ Envoyer sur ma montre : ajoute ta clé Intervals.icu</button>';
+  return `<div class="watch">${head}${btn}${state.fallback?.sheet === 'next' ? fallbackBlock() : ''}</div>`;
+}
+
+function weekWatchBlock(st) {
+  const todo = st.sessions.filter(x => x.status === 'todo' || x.status === 'today');
+  if (!todo.length) return '';
+  if (state.busy?.kind === 'send-week') return typing(`Le coach détaille ${todo.length} séance${todo.length > 1 ? 's' : ''} pour la montre…`);
+  const btn = Icu.getKey()
+    ? `<button class="btn primary" data-sheet="send-week" ${state.busy ? 'disabled' : ''}>⌚ Envoyer les ${todo.length} séance${todo.length > 1 ? 's' : ''} à venir sur ma montre</button>`
+    : '<button class="btn ghost" data-sheet="settings">⌚ Envoyer sur ma montre : ajoute ta clé Intervals.icu</button>';
+  return btn + (state.fallback?.sheet === 'plan' ? fallbackBlock() : '');
+}
+
+async function sendSession(sport) {
+  if (state.busy) return;
+  const acts = activities();
+  const o = nextOpts(sport, acts);
+  const c = Coach.cachedNext(sport, nextKey(sport, acts));
+  if (!c) return;
+  const date = isoDay(addDays(todayUTC(), o.offset));
+  const id = Icu.externalId(date, sport);
+  state.busy = { kind: 'send', sport };
+  state.fallback = null;
+  renderSheet();
+  try {
+    const w = await Coach.structureSession(sport, c.text, coachContext(acts));
+    const text = Icu.workoutText(w, sport);
+    try {
+      await Icu.pushEvents([Icu.makeEvent({ date, sport, name: w.name, text, minutes: w.minutes, externalId: id })]);
+      Icu.markSent(id, { workout: w, direct: true });
+      toast('Séance envoyée : synchronise ta montre');
+    } catch (e) {
+      if (!(e instanceof Icu.BrowserBlockedError)) throw e;
+      Icu.markSent(id, { workout: w, direct: false });
+      state.fallback = { sheet: 'next', items: [{ title: w.name, when: fmtActivityDate(`${date}T00:00`).split(' · ')[0], text }] };
+    }
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    state.busy = null;
+    renderSheet();
+  }
+}
+
+async function sendWeek() {
+  if (state.busy) return;
+  const acts = activities();
+  const w = state.sheet.week || 0;
+  const monday = currentMonday(w);
+  const plan = Coach.getPlan(isoDay(monday));
+  if (!plan) return;
+  const items = planStatus(plan, acts, w).sessions.filter(x => x.status === 'todo' || x.status === 'today');
+  if (!items.length) return;
+  state.busy = { kind: 'send-week' };
+  state.fallback = null;
+  renderSheet();
+  try {
+    const details = await Coach.structureWeek(items, planSituation(acts, false, w, planCount(acts, w)), coachContext(acts));
+    const prepared = details
+      .map(d => ({ d, item: items[d.numero - 1] }))
+      .filter(x => x.item)
+      .map(({ d, item }) => {
+        const date = isoDay(addDays(monday, item.day));
+        return { d, item, date, id: Icu.externalId(date, item.sport), text: Icu.workoutText(d, item.sport) };
+      });
+    try {
+      await Icu.pushEvents(prepared.map(x => Icu.makeEvent({ date: x.date, sport: x.item.sport, name: x.d.name, text: x.text, minutes: x.d.minutes, externalId: x.id })));
+      prepared.forEach(x => Icu.markSent(x.id, { workout: x.d, direct: true }));
+      toast(`${prepared.length} séance${prepared.length > 1 ? 's' : ''} envoyée${prepared.length > 1 ? 's' : ''} : synchronise ta montre`);
+    } catch (e) {
+      if (!(e instanceof Icu.BrowserBlockedError)) throw e;
+      prepared.forEach(x => Icu.markSent(x.id, { workout: x.d, direct: false }));
+      state.fallback = {
+        sheet: 'plan',
+        items: prepared.map(x => ({ title: `${SPORTS[x.item.sport].icon} ${x.d.name}`, when: fmtActivityDate(`${x.date}T00:00`).split(' · ')[0], text: x.text })),
+      };
+    }
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    state.busy = null;
+    renderSheet();
+  }
 }
 
 async function runNext(sport) {
@@ -1059,6 +1188,12 @@ document.addEventListener('click', e => {
   const sh = state.sheet;
   const action = b.dataset.sheet;
   if (action === 'gen-next') runNext(sh.sport);
+  else if (action === 'send-session') sendSession(sh.sport);
+  else if (action === 'send-week') sendWeek();
+  else if (action === 'copy') {
+    const text = state.fallback?.items[Number(b.dataset.i)]?.text || '';
+    navigator.clipboard?.writeText(text).then(() => toast('Séance copiée'), () => toast('Copie impossible : sélectionne le texte'));
+  }
   else if (action === 'gen-plan') runPlan(false);
   else if (action === 'adapt-plan') runPlan(true);
   else if (action === 'open-next') {
@@ -1223,6 +1358,18 @@ function renderSettings() {
       <label class="field"><span>Ton objectif (pour le coach)</span><input id="goal" autocomplete="off" placeholder="Ex. : triathlon M en juin 2027" value="${esc(prefs.goal || '')}"></label>
       <button class="btn primary" data-action="save-coach">Enregistrer</button>
       <p class="muted">Crée une clé sur <code>console.anthropic.com</code> (crédit prépayé). Coûts estimés. Un changement de modèle s'applique à la prochaine conversation. La clé reste uniquement sur ce téléphone.</p>
+    </div>
+
+    <div class="card">
+      <h2>Montre Garmin (Intervals.icu)</h2>
+      <label class="field"><span>Clé API Intervals.icu</span><input id="icu-key" type="password" autocomplete="off" value="${esc(Icu.getKey())}"></label>
+      <button class="btn primary" data-action="save-icu">Enregistrer</button>
+      <ol class="steps" style="margin-top:12px">
+        <li>Crée un compte gratuit sur <code>intervals.icu</code>.</li>
+        <li>Settings → <b>Garmin Connect</b> : connecte ton compte et active l'envoi des séances planifiées (« Upload planned workouts »).</li>
+        <li>Settings → <b>Developer Settings</b> : crée ta clé API et colle-la ici.</li>
+      </ol>
+      <p class="muted">Les séances partent dans ton calendrier Intervals.icu, puis Garmin Connect, puis ta montre à la prochaine synchro. La clé reste sur ce téléphone.</p>
     </div>
 
     <div class="card">
@@ -1395,6 +1542,10 @@ $view.addEventListener('click', e => {
     if (state.coachBusy || !confirm('Commencer une nouvelle conversation avec des stats à jour ?')) return;
     Coach.resetChat();
     render();
+  }
+  else if (d.action === 'save-icu') {
+    Icu.setKey(document.getElementById('icu-key').value);
+    toast('Clé Intervals.icu enregistrée');
   }
   else if (d.action === 'save-coach') {
     Coach.setApiKey(document.getElementById('anthropic-key').value);
