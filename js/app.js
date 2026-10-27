@@ -1027,7 +1027,7 @@ function watchSteps(w, sport, pauses) {
   return `<div class="steps-preview">${w.blocks.map((b, i) => `
     ${pauses && i > 0 ? pause : ''}
     <div class="sp-block"><b>${esc(b.label)}${b.repeat > 1 ? ` · ${b.repeat}×` : ''}</b>
-      <ul>${b.steps.map(st => `<li class="${st.kind}">${esc(Icu.stepLabel(st, sport))}</li>`).join('')}</ul>
+      <ul>${b.steps.map((st, j) => `${pauses && Icu.exercisePause(w, i, j) ? '<li class="repos">⏸ Pause libre (Lap)</li>' : ''}<li class="${st.kind}">${esc(Icu.stepLabel(st, sport))}</li>`).join('')}</ul>
     </div>`).join('')}</div>`;
 }
 
@@ -1376,7 +1376,7 @@ function renderSettings() {
       <button class="btn primary" data-action="save-icu">Enregistrer</button>
       <button class="btn ghost" data-action="test-icu">Tester la connexion</button>
       <div class="switch-row" style="margin-top:14px">
-        <div><strong>Pause entre les blocs</strong><small>Pause libre (non chronométrée) entre échauffement, corps de séance et retour au calme : la montre attend un appui sur Lap.</small></div>
+        <div><strong>Pauses libres</strong><small>Pause non chronométrée entre l'échauffement, chaque exercice du corps de séance et le retour au calme : la montre attend un appui sur Lap.</small></div>
         <label class="switch"><input type="checkbox" id="lap-pauses" ${Icu.getPauses() ? 'checked' : ''}><i></i></label>
       </div>
       <div id="icu-test" class="muted" style="margin-top:8px"></div>
@@ -1609,7 +1609,7 @@ $view.addEventListener('input', e => {
 $view.addEventListener('change', e => {
   if (e.target.id === 'lap-pauses') {
     Icu.setPauses(e.target.checked);
-    toast(e.target.checked ? 'Pauses entre les blocs activées' : 'Pauses entre les blocs désactivées');
+    toast(e.target.checked ? 'Pauses libres activées' : 'Pauses libres désactivées');
     return;
   }
   if (e.target.id === 'tolerance') {

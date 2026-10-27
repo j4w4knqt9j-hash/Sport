@@ -429,7 +429,8 @@ const WORKOUT_RULES = `Règles pour les étapes (elles seront envoyées sur une 
 - Vélo : cibles en zone de FC (pas de capteur de puissance), ou aucune cible.
 - Natation (piscine) : étapes en distance (mètres, multiples de 25), séries avec des étapes « repos » en temps entre elles, pas de cible d'allure (la montre les gère mal) ; mets la consigne dans « note ».
 - Une répétition = un bloc avec repeat > 1 (pas de répétitions imbriquées).
-- Échauffement et retour au calme en blocs séparés.`;
+- Échauffement et retour au calme en blocs séparés.
+- Dans le corps de séance, chaque exercice différent (éducatif, série à une allure, pull-buoy, côte…) forme son propre bloc, répété si besoin : une pause libre sera ajoutée automatiquement entre les blocs. Ne mets pas d'étape de récupération entre deux exercices différents, seulement entre les répétitions d'un même exercice.`;
 
 async function structured(prompt, schema, context) {
   const final = await streamClaude({

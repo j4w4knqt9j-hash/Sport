@@ -60,17 +60,28 @@ function stepLine(st, sport) {
   return parts.filter(Boolean).join(' ');
 }
 
+// Pause ouverte avant l'étape j du bloc i : entre deux exercices différents d'un bloc
+// non répété du corps de séance (pas dans l'échauffement ni le retour au calme)
+export function exercisePause(w, i, j) {
+  const b = w.blocks[i];
+  if (j === 0 || b.repeat > 1 || i === 0 || i === w.blocks.length - 1) return false;
+  return b.steps[j].kind === 'effort' && b.steps[j - 1].kind === 'effort';
+}
+
+// Étape ouverte : la durée ne sert qu'au calcul de la durée prévue, la montre attend un appui sur Lap
+const OPEN_STEP = '- Press lap 1m intensity=rest';
+
 // Convertit la séance structurée par Claude en texte de séance Intervals.icu
 export function workoutText(w, sport, pauses = getPauses()) {
   const out = [];
   w.blocks.forEach((b, i) => {
-    if (pauses && i > 0) {
-      // étape ouverte : la durée ne sert qu'au calcul de la durée prévue, la montre attend un appui sur Lap
-      out.push('Pause', '- Press lap 1m intensity=rest', '');
-    }
+    if (pauses && i > 0) out.push('Pause', OPEN_STEP, '');
     const label = (b.label || '').replace(/\d+\s*x/gi, '').trim() || 'Bloc';
     out.push(b.repeat > 1 ? `${label} ${b.repeat}x` : label);
-    for (const st of b.steps) out.push(stepLine(st, sport));
+    b.steps.forEach((st, j) => {
+      if (pauses && exercisePause(w, i, j)) out.push(OPEN_STEP);
+      out.push(stepLine(st, sport));
+    });
     out.push('');
   });
   return out.join('\n').trim();
