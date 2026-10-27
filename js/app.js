@@ -1379,7 +1379,7 @@ function renderCoach() {
     return;
   }
   const chat = Coach.loadChat();
-  const msgs = chat?.messages || [];
+  const msgs = (chat?.messages || []).filter(m => m.role !== 'system');
   const bubbles = msgs.map(m => m.role === 'user'
     ? `<div class="msg user">${esc(Coach.messageText(m))}</div>`
     : `<div class="msg bot">${Coach.renderMarkdown(Coach.messageText(m))}</div>`).join('');
@@ -1418,10 +1418,36 @@ function coachContext(acts) {
   });
 }
 
+// Programme et semaine en cours, transmis au chat à jour à chaque message
+function chatLive(acts) {
+  const t = todayIndex();
+  const lines = [`Aujourd'hui : ${Coach.DAYS[t]} ${fmtDayMonth(todayUTC())}`];
+  const curKey = isoDay(currentMonday(0));
+  const done = doneLines(acts, curKey);
+  lines.push('', done.length ? 'Séances faites cette semaine :' : 'Aucune séance faite cette semaine pour l\'instant.', ...done);
+  for (const w of [0, 1]) {
+    const monday = currentMonday(w);
+    const key = isoDay(monday);
+    const label = w === 0 ? 'de la semaine en cours' : 'de la semaine prochaine';
+    const plan = Coach.getPlan(key);
+    const pins = getPins(key);
+    if (plan) {
+      lines.push('', `Programme ${label} (du ${fmtDayMonth(monday)}) : ${plan.resume}`, ...planLines(plan, planStatus(plan, acts, w)));
+    } else {
+      lines.push('', `Pas de programme ${label} pour l'instant.`);
+    }
+    if (pins.length) lines.push(`Séances imposées ${label} : ${pins.map(p => `${Coach.DAYS[p.day]} ${SPORTS[p.sport].label.toLowerCase()}${p.minutes ? ` (${p.minutes} min)` : ''}`).join(', ')}.`);
+  }
+  lines.push('', `Sports cochés pour la programmation : ${planSports().map(k => SPORTS[k].label.toLowerCase()).join(', ')}.`);
+  return lines.join('\n');
+}
+
 async function sendCoach(text) {
   text = text.trim();
   if (!text || state.coachBusy) return;
-  const context = coachContext(activities());
+  const acts = activities();
+  const context = coachContext(acts);
+  const live = chatLive(acts);
   state.coachBusy = true;
   render();
   const chatEl = document.getElementById('chat');
@@ -1431,7 +1457,7 @@ async function sendCoach(text) {
   window.scrollTo(0, document.body.scrollHeight);
   try {
     state.memoryFlash = null;
-    const res = await Coach.ask(text, context, partial => {
+    const res = await Coach.ask(text, context, live, partial => {
       bot.classList.remove('typing');
       bot.innerHTML = Coach.renderMarkdown(partial);
       window.scrollTo(0, document.body.scrollHeight);

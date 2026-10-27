@@ -305,14 +305,23 @@ function systemFor(context) {
 }
 
 // Envoie `text` au coach. `onText(texteCumulé)` est appelé au fil de la réponse.
-export async function ask(text, context, onText) {
+// `live` : état à jour du programme et de la semaine. S'il a changé depuis le dernier envoi,
+// il est ajouté comme message système après celui de l'athlète (ajout en fin de conversation,
+// sans toucher à son début).
+export async function ask(text, context, live, onText) {
   let chat = loadChat();
   if (!chat?.messages?.length) {
     chat = { context, model: getModel(), createdAt: Date.now(), messages: [] };
   }
   // consignes figées au début de la conversation : une mise à jour de l'appli ne change pas son début
   chat.system ??= chat.messages.length ? null : [...systemFor(chat.context), { type: 'text', text: CHAT_RULES }];
+  const before = chat.messages.length;
+  const prevLive = chat.lastLive;
   chat.messages.push({ role: 'user', content: text });
+  if (live && live !== chat.lastLive) {
+    chat.messages.push({ role: 'system', content: `Informations à jour de l'appli (elles remplacent les précédentes) :\n\n${live}` });
+    chat.lastLive = live;
+  }
   saveChat(chat);
   try {
     // une conversation garde le modèle avec lequel elle a commencé
@@ -328,7 +337,8 @@ export async function ask(text, context, onText) {
     const raw = final.content.filter(b => b.type === 'text').map(b => b.text).join('');
     return { final, memory: applyMemory(raw) };
   } catch (e) {
-    chat.messages.pop();
+    chat.messages.length = before;
+    chat.lastLive = prevLive;
     saveChat(chat);
     throw e;
   }
