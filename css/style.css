@@ -392,8 +392,8 @@ body.no-scroll { overflow: hidden; }
   position: fixed; inset: 0; z-index: 50;
   background: rgba(0, 0, 0, 0.55);
   display: flex; align-items: flex-end; justify-content: center;
-  animation: fade 0.2s ease;
 }
+.sheet-backdrop.enter { animation: fade 0.2s ease; }
 .sheet {
   width: 100%; max-width: 560px;
   max-height: 88vh;
@@ -401,8 +401,8 @@ body.no-scroll { overflow: hidden; }
   background: var(--bg);
   border-radius: 22px 22px 0 0;
   padding: 8px 16px calc(16px + env(safe-area-inset-bottom));
-  animation: slide-up 0.25s ease;
 }
+.sheet-backdrop.enter .sheet { animation: slide-up 0.25s ease; }
 .sheet::before { content: ""; display: block; width: 40px; height: 5px; border-radius: 99px; background: var(--border); margin: 0 auto 10px; }
 .sheet-head { display: grid; grid-template-columns: 44px 1fr 40px; gap: 12px; align-items: center; margin-bottom: 12px; }
 .sheet-head span { display: block; font-size: 12px; }
@@ -411,3 +411,31 @@ body.no-scroll { overflow: hidden; }
 .sheet-body h4 { font-size: 18px; margin: 4px 0 10px; }
 @keyframes fade { from { opacity: 0; } }
 @keyframes slide-up { from { transform: translateY(40px); opacity: 0; } }
+
+/* ---------- Programme de la semaine ---------- */
+.hero-cta { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,0.18); font-weight: 700; font-size: 14px; cursor: pointer; }
+.hero-cta span { font-size: 18px; line-height: 1; }
+.opt-label { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 4px 0 6px; }
+.sheet .chips { margin-bottom: 10px; }
+.sheet .chips button { padding: 6px 12px; }
+.plan-hint { font-size: 13px; padding: 8px 12px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); margin-bottom: 12px; }
+.plan-resume { margin-top: 0; }
+.plan-progress { font-size: 14px; margin-bottom: 8px; }
+.missed-txt { color: var(--bad); font-weight: 700; }
+.plan-day { padding: 8px 0; border-top: 1px solid var(--border); }
+.plan-day.is-today .plan-day-name { color: var(--accent); }
+.plan-day-name { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 4px; }
+.plan-rest { font-size: 13px; color: var(--muted); }
+.plan-row { display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; align-items: center; padding: 6px 0; }
+.plan-row[data-sheet] { cursor: pointer; }
+.plan-row .sport-icon { width: 40px; height: 40px; font-size: 19px; border-radius: 12px; }
+.plan-title { font-weight: 700; font-size: 15px; }
+.plan-content { font-size: 13px; color: var(--muted); }
+.plan-real { font-size: 12px; color: var(--good); font-weight: 600; margin-top: 2px; }
+.plan-row.missed .plan-title { color: var(--muted); text-decoration: line-through; }
+.plan-side { display: flex; align-items: center; gap: 6px; }
+.plan-side .chev { color: var(--muted); font-size: 20px; }
+.badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 99px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.badge.done { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.badge.missed { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+.badge.today { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }

@@ -37,9 +37,10 @@ const state = {
   detailLoading: null,
   aiBusy: null,
   aiPartial: '',
-  nextSport: null,
-  nextBusy: null,
-  nextPartial: '',
+  sheet: null,
+  busy: null,
+  partial: '',
+  nextOpts: {},
 };
 
 let charts = [];
@@ -190,6 +191,7 @@ function renderWeek(acts) {
       <div class="sub">d'entraînement · sem. ${isCurrent ? 'dernière' : 'précédente'} : <b>${fmtDuration(prev.all.time)}</b></div>
       ${prev.all.time ? `<div class="hero-bar"><i style="width:${Math.min(100, cur.all.time / prev.all.time * 100)}%"></i></div>` : ''}
       <div class="hero-goal">${heroGoal(cur.all.time, prev.all.time, isCurrent)}</div>
+      ${isCurrent ? heroPlanCta(acts) : ''}
       <div class="row">
         <div><strong>${cur.all.count}</strong>séances</div>
         <div><strong>${Math.round(cur.all.elevation)} m</strong>D+</div>
@@ -209,6 +211,12 @@ function renderWeek(acts) {
     </div>`;
 
   drawWeeklyChart(acts, monday);
+}
+
+function heroPlanCta(acts) {
+  const plan = Coach.getPlan(isoDay(currentMonday(0)));
+  const st = plan && planStatus(plan, acts);
+  return `<div class="hero-cta" data-plan>✨ Programme de la semaine${st ? ` · ${st.done}/${st.sessions.length} faites` : ''} <span>›</span></div>`;
 }
 
 function heroGoal(cur, prev, isCurrent) {
@@ -642,30 +650,119 @@ async function loadStreams(a) {
   }
 }
 
-// ---------- Prochaine séance (fenêtre) ----------
+// ---------- Programme de la semaine et prochaine séance (fenêtres) ----------
+
+const DAY_SHORT = ['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.'];
+const TIME_OPTIONS = [null, 30, 45, 60, 90, 120, 180];
+
+function todayUTC() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+}
+
+// Jour de la semaine en cours (0 = lundi)
+function todayIndex() {
+  return (todayUTC().getUTCDay() + 6) % 7;
+}
+
+function dayOfAct(a) {
+  return (new Date(a.local.slice(0, 10) + 'T00:00:00Z').getUTCDay() + 6) % 7;
+}
+
+function fmtMinutes(m) {
+  return m == null ? 'Non précisé' : fmtDuration(m * 60);
+}
+
+// Rapproche le programme des sorties réellement faites cette semaine
+function planStatus(plan, acts) {
+  const key = isoDay(currentMonday(0));
+  const week = acts.filter(a => a.week === key).map(a => ({ a, day: dayOfAct(a), used: false }));
+  const sessions = plan.sessions.map(x => ({ ...x, act: null }));
+  // d'abord le jour exact, puis à un ou deux jours près
+  for (const gap of [0, 1, 2]) {
+    for (const w of week) {
+      if (w.used) continue;
+      const cand = sessions
+        .filter(x => !x.act && x.sport === w.a.sport && Math.abs(x.day - w.day) <= gap)
+        .sort((x, y) => Math.abs(x.day - w.day) - Math.abs(y.day - w.day))[0];
+      if (cand) { cand.act = w.a; w.used = true; }
+    }
+  }
+  const t = todayIndex();
+  sessions.forEach(x => {
+    x.status = x.act ? 'done' : x.day < t ? 'missed' : x.day === t ? 'today' : 'todo';
+  });
+  return {
+    sessions,
+    extras: week.filter(w => !w.used).map(w => w.a),
+    done: sessions.filter(x => x.status === 'done').length,
+    missed: sessions.filter(x => x.status === 'missed').length,
+  };
+}
+
+function planLines(plan, status) {
+  const labels = { done: 'fait', missed: 'manqué', today: 'prévu aujourd\'hui', todo: 'à venir' };
+  const lines = status.sessions.map(x => {
+    const real = x.act ? ` → réalisé : ${fmtDistance(x.act.distance, x.sport)} en ${fmtDuration(x.act.time)}${dayOfAct(x.act) !== x.day ? ` (le ${Coach.DAYS[dayOfAct(x.act)]})` : ''}` : '';
+    return `- ${Coach.DAYS[x.day]} · ${SPORTS[x.sport].label} · ${x.title} (${x.minutes} min) : ${x.content} [${labels[x.status]}]${real}`;
+  });
+  status.extras.forEach(a => lines.push(`- ${Coach.DAYS[dayOfAct(a)]} · ${SPORTS[a.sport].label} · hors programme : « ${a.name.slice(0, 60)} », ${fmtDistance(a.distance, a.sport)} en ${fmtDuration(a.time)}`));
+  return lines;
+}
+
+// Nombre de séances habituel : moyenne des 4 dernières semaines complètes
+function habitualSessions(acts) {
+  const monday = currentMonday(0);
+  const weeks = weeklySeries(acts, addDays(monday, -7), 4);
+  const avg = k => weeks.reduce((t, w) => t + w.totals[k].count, 0) / weeks.length;
+  return { weeks, total: Math.max(1, Math.round(avg('all'))), avg };
+}
+
+function planSituation(acts, adapting) {
+  const t = todayIndex();
+  const h = habitualSessions(acts);
+  const lines = [
+    `Aujourd'hui : ${Coach.DAYS[t]} (jour ${t + 1}/7 de la semaine).`,
+    `Nombre de séances à prévoir sur la semaine : ${h.total} (ma moyenne des 4 dernières semaines : ${fmtNumber(h.avg('all'))} ; natation ${fmtNumber(h.avg('swim'))}, vélo ${fmtNumber(h.avg('ride'))}, course ${fmtNumber(h.avg('run'))}).`,
+    'Mes 4 dernières semaines :',
+    ...h.weeks.map(w => `- ${fmtWeekRange(w.monday)} : ${w.totals.all.count} séances (natation ${w.totals.swim.count}, vélo ${w.totals.ride.count}, course ${w.totals.run.count}), ${fmtDuration(w.totals.all.time)}`),
+  ];
+  const key = isoDay(currentMonday(0));
+  const done = acts.filter(a => a.week === key).sort((a, b) => a.local.localeCompare(b.local));
+  lines.push(done.length ? 'Déjà fait cette semaine :' : 'Rien de fait cette semaine pour l\'instant.');
+  done.forEach(a => lines.push(`- ${Coach.DAYS[dayOfAct(a)]} · ${SPORTS[a.sport].label} · « ${a.name.slice(0, 60)} », ${fmtDistance(a.distance, a.sport)} en ${fmtDuration(a.time)}${a.effort != null ? `, effort ${a.effort}` : ''}`));
+  const plan = Coach.getPlan(key);
+  if (adapting && plan) {
+    lines.push('', 'Programme précédent et suivi :', ...planLines(plan, planStatus(plan, acts)));
+  }
+  return lines.join('\n');
+}
 
 // Résumé de la situation dans un sport, pour la suggestion de l'IA
-function nextSituation(acts, sport) {
+function nextSituation(acts, sport, opts) {
   const monday = currentMonday(0);
   const cur = weekTotals(acts, isoDay(monday));
   const prev = weekTotals(acts, isoDay(addDays(monday, -7)));
   const label = SPORTS[sport].label;
-  const now = new Date();
-  const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const today = todayUTC();
   const daysAgo = a => {
     const n = Math.round((today - new Date(a.local.slice(0, 10) + 'T00:00:00Z')) / 864e5);
     return n === 0 ? 'aujourd\'hui' : n === 1 ? 'hier' : `il y a ${n} j`;
   };
-  const dayIndex = (today.getUTCDay() + 6) % 7 + 1;
+  const t = todayIndex();
+  const target = addDays(today, opts.offset);
+  const targetDay = (target.getUTCDay() + 6) % 7;
   const sorted = [...acts].sort((a, b) => b.local.localeCompare(a.local));
   const lines = [
     `Sport demandé : ${label}`,
-    `Aujourd'hui : ${today.toLocaleDateString('fr-FR', { weekday: 'long', timeZone: 'UTC' })}, jour ${dayIndex}/7 de la semaine en cours.`,
+    `Aujourd'hui : ${Coach.DAYS[t]}, jour ${t + 1}/7 de la semaine en cours.`,
+    `Jour prévu pour la séance : ${Coach.DAYS[targetDay]} ${fmtDayMonth(target)} (${opts.offset === 0 ? 'aujourd\'hui' : opts.offset === 1 ? 'demain' : `dans ${opts.offset} jours`}${t + opts.offset > 6 ? ', semaine prochaine' : ''}).`,
+    `Temps disponible : ${opts.time == null ? 'non précisé (propose une durée adaptée)' : `${fmtDuration(opts.time * 60)} maximum`}.`,
     `Cette semaine en ${label.toLowerCase()} : ${cur[sport].count} séance(s), ${fmtDistance(cur[sport].distance, sport)}, ${fmtDuration(cur[sport].time)} (semaine dernière : ${prev[sport].count} séance(s), ${fmtDuration(prev[sport].time)}).`,
     `Cette semaine tous sports : ${fmtDuration(cur.all.time)} (semaine dernière : ${fmtDuration(prev.all.time)}).`,
   ];
   const load = loadRatio(acts, monday);
-  if (load) lines.push(`Effort relatif cumulé cette semaine : ${Math.round(load.cur)} (moyenne des 4 semaines précédentes : ${Math.round(load.prev)} par semaine complète ; semaine en cours, jour ${dayIndex}/7).`);
+  if (load) lines.push(`Effort relatif cumulé cette semaine : ${Math.round(load.cur)} (moyenne des 4 semaines précédentes : ${Math.round(load.prev)} par semaine complète ; semaine en cours, jour ${t + 1}/7).`);
   const speed = averageSpeed(acts, sport, monday);
   if (speed) lines.push(`Allure moyenne récente en ${label.toLowerCase()} : ${fmtPaceValue(paceValue(speed, sport), sport)}.`);
   const lastSport = sorted.filter(a => a.sport === sport).slice(0, 3);
@@ -677,6 +774,12 @@ function nextSituation(acts, sport) {
   }
   const last = sorted[0];
   if (last) lines.push(`Dernière séance tous sports : ${SPORTS[last.sport].label.toLowerCase()} ${daysAgo(last)}${last.effort != null ? ` (effort ${last.effort})` : ''}.`);
+  const plan = Coach.getPlan(isoDay(monday));
+  if (plan) {
+    lines.push('', `Programme de la semaine : ${plan.resume}`, ...planLines(plan, planStatus(plan, acts)));
+  } else {
+    lines.push('', 'Pas de programme hebdomadaire établi.');
+  }
   return lines.join('\n');
 }
 
@@ -685,76 +788,215 @@ function nextStamp(acts) {
   return `${isoDay(currentMonday(0))}|${new Date().toDateString()}|${latest}|${acts.length}`;
 }
 
-function openNext(sport) {
-  state.nextSport = sport;
+function nextOpts(sport, acts) {
+  state.nextOpts ??= {};
+  if (!state.nextOpts[sport]) {
+    // par défaut : la prochaine séance de ce sport prévue au programme, sinon aujourd'hui
+    const plan = Coach.getPlan(isoDay(currentMonday(0)));
+    const t = todayIndex();
+    const planned = plan && planStatus(plan, acts).sessions.find(x => x.sport === sport && (x.status === 'today' || x.status === 'todo'));
+    state.nextOpts[sport] = { offset: planned ? planned.day - t : 0, time: null };
+  }
+  return state.nextOpts[sport];
+}
+
+function nextKey(sport, acts) {
+  const o = nextOpts(sport, acts);
+  const plan = Coach.getPlan(isoDay(currentMonday(0)));
+  return `${nextStamp(acts)}|${o.offset}|${o.time}|${plan?.at || ''}`;
+}
+
+function openSheet(sheet) {
+  state.sheet = sheet;
   document.body.classList.add('no-scroll');
   renderSheet();
-  const acts = activities();
-  if (Coach.getApiKey() && !state.nextBusy && !Coach.cachedNext(sport, nextStamp(acts))) runNext();
 }
 
-function closeNext() {
-  state.nextSport = null;
+function openNext(sport, offset, from) {
+  if (offset != null) {
+    nextOpts(sport, activities());
+    state.nextOpts[sport].offset = offset;
+  }
+  openSheet({ type: 'next', sport, from });
+}
+
+function closeSheet() {
+  state.sheet = null;
   document.body.classList.remove('no-scroll');
   document.getElementById('sheet')?.remove();
+  if (state.view === 'week') render();
 }
 
-function renderSheet() {
-  const sport = state.nextSport;
-  if (!sport) return;
-  let el = document.getElementById('sheet');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'sheet';
-    el.className = 'sheet-backdrop';
-    document.body.appendChild(el);
-  }
-  let body;
-  if (!Coach.getApiKey()) {
-    body = `<p class="muted">Ajoute ta clé API Anthropic pour que le coach te propose tes séances.</p>
-      <button class="btn primary" data-sheet="settings">Aller aux réglages</button>`;
-  } else if (state.nextBusy === sport) {
-    body = `<div id="next-body" class="ai-text">${state.nextPartial ? Coach.renderMarkdown(state.nextPartial) : '<p class="muted">Le coach prépare ta séance…</p><div class="msg typing"><i></i><i></i><i></i></div>'}</div>`;
-  } else {
-    const c = Coach.cachedNext(sport, nextStamp(activities()));
-    body = c
-      ? `<div class="ai-text">${Coach.renderMarkdown(c.text)}</div>
-         <div class="ai-foot">
-           <span class="muted">${esc(Coach.modelLabel(c.model))} · ${new Date(c.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span>
-           <button class="link" data-sheet="regen">Autre proposition</button>
-         </div>`
-      : `<p class="muted">${state.nextBusy ? 'Une autre suggestion est en cours…' : 'Pas encore de suggestion.'}</p>
-         <button class="btn primary" data-sheet="regen" ${state.nextBusy ? 'disabled' : ''}>✨ Proposer une séance</button>`;
-  }
-  el.innerHTML = `
-    <div class="sheet" role="dialog" aria-modal="true" aria-label="Prochaine séance">
+function sheetFrame(icon, sub, title, body) {
+  return `
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}">
       <div class="sheet-head">
-        ${iconBox(sport)}
-        <div><span class="muted">Prochaine séance</span><strong>${SPORTS[sport].label}</strong></div>
+        ${icon}
+        <div><span class="muted">${sub}</span><strong>${title}</strong></div>
         <button class="icon-btn" data-sheet="close" aria-label="Fermer">✕</button>
       </div>
       <div class="sheet-body">${body}</div>
     </div>`;
 }
 
-async function runNext() {
-  const sport = state.nextSport;
-  if (!sport || state.nextBusy) return;
+const NO_KEY = `<p class="muted">Ajoute ta clé API Anthropic pour que le coach prépare tes séances.</p>
+  <button class="btn primary" data-sheet="settings">Aller aux réglages</button>`;
+
+function typing(text) {
+  return `<p class="muted">${text}</p><div class="msg typing"><i></i><i></i><i></i></div>`;
+}
+
+function renderSheet() {
+  const sh = state.sheet;
+  if (!sh) return;
+  let el = document.getElementById('sheet');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'sheet';
+    el.className = 'sheet-backdrop enter';
+    document.body.appendChild(el);
+    setTimeout(() => el.classList.remove('enter'), 300);
+  }
+  const scroll = el.querySelector('.sheet-body')?.scrollTop || 0;
+  el.innerHTML = sh.type === 'plan' ? planSheet() : nextSheet(sh.sport);
+  el.querySelector('.sheet-body').scrollTop = scroll;
+}
+
+function planSheet() {
   const acts = activities();
-  state.nextBusy = sport;
-  state.nextPartial = '';
+  const monday = currentMonday(0);
+  const plan = Coach.getPlan(isoDay(monday));
+  const icon = '<div class="sport-icon" style="background:#fc4c0222">🗓️</div>';
+  const title = `Semaine du ${fmtDayMonth(monday)}`;
+  let body;
+  if (!Coach.getApiKey()) body = NO_KEY;
+  else if (state.busy?.kind === 'plan') body = typing('Le coach prépare ton programme…');
+  else if (!plan) {
+    const h = habitualSessions(acts);
+    body = `<p>Le coach répartit <b>${h.total} séances</b> (ta moyenne des 4 dernières semaines) entre natation, vélo et course, avec le thème de chaque séance.</p>
+      <p class="muted">Les séances déjà faites cette semaine sont prises en compte.</p>
+      <button class="btn primary" data-sheet="gen-plan" ${state.busy ? 'disabled' : ''}>✨ Générer le programme</button>`;
+  } else {
+    const st = planStatus(plan, acts);
+    const t = todayIndex();
+    const badge = { done: '<span class="badge done">✓ Fait</span>', missed: '<span class="badge missed">Manquée</span>', today: '<span class="badge today">Aujourd\'hui</span>', todo: '' };
+    const days = Coach.DAYS.map((d, i) => {
+      const items = st.sessions.filter(x => x.day === i);
+      const extras = st.extras.filter(a => dayOfAct(a) === i);
+      const rows = items.map(x => `
+        <div class="plan-row ${x.status}" ${x.status === 'done' ? '' : `data-sheet="open-next" data-sport="${x.sport}" data-day="${i}"`}>
+          ${iconBox(x.sport)}
+          <div>
+            <div class="plan-title">${esc(x.title)} <span class="muted">· ${fmtDuration(x.minutes * 60)}</span></div>
+            <div class="plan-content">${esc(x.content)}</div>
+            ${x.act ? `<div class="plan-real">${fmtDistance(x.act.distance, x.sport)} en ${fmtDuration(x.act.time)}</div>` : ''}
+          </div>
+          <div class="plan-side">${badge[x.status]}${x.status === 'done' ? '' : '<span class="chev">›</span>'}</div>
+        </div>`).join('') + extras.map(a => `
+        <div class="plan-row extra">
+          ${iconBox(a.sport)}
+          <div>
+            <div class="plan-title">${esc(a.name)}</div>
+            <div class="plan-real">${fmtDistance(a.distance, a.sport)} en ${fmtDuration(a.time)}</div>
+          </div>
+          <div class="plan-side"><span class="badge">Hors programme</span></div>
+        </div>`).join('');
+      return `<div class="plan-day ${i === t ? 'is-today' : ''}">
+        <div class="plan-day-name">${d.charAt(0).toUpperCase() + d.slice(1)} ${addDays(monday, i).getUTCDate()}</div>
+        ${rows || '<div class="plan-rest">Repos</div>'}
+      </div>`;
+    }).join('');
+    body = `
+      <p class="plan-resume">${esc(plan.resume)}</p>
+      <div class="plan-progress"><b>${st.done}/${st.sessions.length}</b> séances faites${st.missed ? ` · <span class="missed-txt">${st.missed} manquée${st.missed > 1 ? 's' : ''}</span>` : ''}</div>
+      ${days}
+      <p class="muted">Touche une séance pour la détailler.</p>
+      <button class="btn ghost" data-sheet="adapt-plan" ${state.busy ? 'disabled' : ''}>Adapter le programme à ma semaine réelle</button>
+      <div class="ai-foot"><span class="muted">${esc(Coach.modelLabel(plan.model))} · ${new Date(plan.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span></div>`;
+  }
+  return sheetFrame(icon, 'Programme de la semaine', title, body);
+}
+
+function nextSheet(sport) {
+  const acts = activities();
+  const o = nextOpts(sport, acts);
+  const today = todayUTC();
+  const t = todayIndex();
+  const dayChips = Array.from({ length: 7 }, (_, i) => {
+    const d = addDays(today, i);
+    const label = i === 0 ? 'Auj.' : i === 1 ? 'Demain' : `${DAY_SHORT[(t + i) % 7]} ${d.getUTCDate()}`;
+    return `<button data-sheet="day" data-day="${i}" class="${o.offset === i ? 'active' : ''}">${label}</button>`;
+  }).join('');
+  const timeChips = TIME_OPTIONS.map(m => `<button data-sheet="time" data-time="${m ?? ''}" class="${o.time === m ? 'active' : ''}">${fmtMinutes(m)}</button>`).join('');
+
+  // séance prévue au programme ce jour-là
+  const plan = Coach.getPlan(isoDay(currentMonday(0)));
+  const planned = plan && t + o.offset <= 6
+    && planStatus(plan, acts).sessions.find(x => x.sport === sport && x.day === t + o.offset && x.status !== 'done');
+  const hint = planned
+    ? `<div class="plan-hint">🗓️ Au programme : <b>${esc(planned.title)}</b> · ${fmtDuration(planned.minutes * 60)}</div>`
+    : plan ? '<div class="plan-hint muted">Pas de séance de ce sport prévue ce jour-là au programme.</div>' : '';
+
+  let body;
+  if (!Coach.getApiKey()) body = NO_KEY;
+  else if (state.busy?.kind === 'next' && state.busy.sport === sport) {
+    body = `<div id="sheet-stream" class="ai-text">${state.partial ? Coach.renderMarkdown(state.partial) : typing('Le coach prépare ta séance…')}</div>`;
+  } else {
+    const c = Coach.cachedNext(sport, nextKey(sport, acts));
+    body = c
+      ? `<div class="ai-text">${Coach.renderMarkdown(c.text)}</div>
+         <div class="ai-foot">
+           <span class="muted">${esc(Coach.modelLabel(c.model))} · ${new Date(c.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span>
+           <button class="link" data-sheet="gen-next" ${state.busy ? 'disabled' : ''}>Autre proposition</button>
+         </div>`
+      : `<button class="btn primary" data-sheet="gen-next" ${state.busy ? 'disabled' : ''}>✨ Proposer la séance</button>`;
+  }
+  return sheetFrame(iconBox(sport), 'Prochaine séance', SPORTS[sport].label, `
+    ${state.sheet.from === 'plan' ? '<button class="back" data-sheet="back-plan">‹ Programme</button>' : ''}
+    <div class="opt-label">Jour prévu</div>
+    <div class="chips">${dayChips}</div>
+    <div class="opt-label">Temps disponible</div>
+    <div class="chips">${timeChips}</div>
+    ${hint}
+    ${body}`);
+}
+
+async function runNext(sport) {
+  if (state.busy) return;
+  const acts = activities();
+  const opts = nextOpts(sport, acts);
+  const plan = Coach.getPlan(isoDay(currentMonday(0)));
+  state.busy = { kind: 'next', sport };
+  state.partial = '';
   renderSheet();
   try {
-    await Coach.suggestNext(sport, nextSituation(acts, sport), coachContext(acts), nextStamp(acts), partial => {
-      state.nextPartial = partial;
-      const el = document.getElementById('next-body');
-      if (el && state.nextSport === sport) el.innerHTML = Coach.renderMarkdown(partial);
+    await Coach.suggestNext(sport, nextSituation(acts, sport, opts), coachContext(acts), nextKey(sport, acts), Boolean(plan), partial => {
+      state.partial = partial;
+      const el = document.getElementById('sheet-stream');
+      if (el) el.innerHTML = Coach.renderMarkdown(partial);
     });
   } catch (e) {
     toast(e.message);
   } finally {
-    state.nextBusy = null;
-    state.nextPartial = '';
+    state.busy = null;
+    state.partial = '';
+    renderSheet();
+  }
+}
+
+async function runPlan(adapting) {
+  if (state.busy) return;
+  const acts = activities();
+  state.busy = { kind: 'plan' };
+  renderSheet();
+  try {
+    await Coach.generatePlan(isoDay(currentMonday(0)), planSituation(acts, adapting), coachContext(acts), adapting, () => {});
+    // les suggestions de séance s'aligneront sur le nouveau programme
+    state.nextOpts = {};
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    state.busy = null;
     renderSheet();
   }
 }
@@ -763,11 +1005,22 @@ document.addEventListener('click', e => {
   const sheet = document.getElementById('sheet');
   if (!sheet || !sheet.contains(e.target)) return;
   const b = e.target.closest('[data-sheet]');
-  if (e.target === sheet || b?.dataset.sheet === 'close') return closeNext();
-  if (!b) return;
-  if (b.dataset.sheet === 'regen') runNext();
-  else if (b.dataset.sheet === 'settings') {
-    closeNext();
+  if (e.target === sheet || b?.dataset.sheet === 'close') return closeSheet();
+  if (!b || b.disabled) return;
+  const sh = state.sheet;
+  const action = b.dataset.sheet;
+  if (action === 'gen-next') runNext(sh.sport);
+  else if (action === 'gen-plan') runPlan(false);
+  else if (action === 'adapt-plan') runPlan(true);
+  else if (action === 'open-next') openNext(b.dataset.sport, Math.max(0, Number(b.dataset.day) - todayIndex()), 'plan');
+  else if (action === 'back-plan') { state.sheet = { type: 'plan' }; renderSheet(); }
+  else if (action === 'day' || action === 'time') {
+    const o = nextOpts(sh.sport, activities());
+    if (action === 'day') o.offset = Number(b.dataset.day);
+    else o.time = b.dataset.time === '' ? null : Number(b.dataset.time);
+    renderSheet();
+  } else if (action === 'settings') {
+    closeSheet();
     state.view = 'settings';
     state.detailId = null;
     render();
@@ -775,7 +1028,7 @@ document.addEventListener('click', e => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && state.nextSport) closeNext();
+  if (e.key === 'Escape' && state.sheet) closeSheet();
 });
 
 // ---------- Vue Coach ----------
@@ -1037,6 +1290,7 @@ $view.addEventListener('click', e => {
   if (!t) {
     const card = e.target.closest('.sport-card[data-next]');
     if (card) return openNext(card.dataset.next);
+    if (e.target.closest('[data-plan]')) return openSheet({ type: 'plan' });
     const row = e.target.closest('.act[data-open]');
     if (row) {
       state.listScroll = window.scrollY;

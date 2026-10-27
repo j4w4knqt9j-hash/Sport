@@ -134,7 +134,7 @@ function friendlyError(Anthropic, e) {
 
 // Appel en streaming commun au chat et aux analyses de sortie.
 // `onText(texteCumulé)` est appelé au fil de la réponse ; renvoie le message final.
-async function streamClaude({ model, system, messages }, onText) {
+async function streamClaude({ model, system, messages, format }, onText) {
   let Anthropic;
   try {
     Anthropic = await loadSdk();
@@ -149,7 +149,7 @@ async function streamClaude({ model, system, messages }, onText) {
       model,
       max_tokens: 16000,
       thinking: { type: 'adaptive' },
-      output_config: { effort: 'medium' },
+      output_config: { effort: 'medium', ...(format ? { format } : {}) },
       cache_control: { type: 'ephemeral' },
       ...fallback,
       system,
@@ -258,12 +258,85 @@ export async function analyseActivity(act, description, context, onText) {
   return result;
 }
 
+// ---------- Programme de la semaine ----------
+
+const PLAN_KEY = 'trisuivi.plan.';
+export const DAYS = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
+const SPORT_FROM_FR = { natation: 'swim', velo: 'ride', course: 'run' };
+
+const PLAN_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['resume', 'seances'],
+  properties: {
+    resume: { type: 'string', description: 'Deux ou trois phrases : logique de la semaine.' },
+    seances: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['jour', 'sport', 'titre', 'contenu', 'duree_min'],
+        properties: {
+          jour: { type: 'string', enum: DAYS },
+          sport: { type: 'string', enum: ['natation', 'velo', 'course'] },
+          titre: { type: 'string', description: 'Trois à six mots.' },
+          contenu: { type: 'string', description: 'Une phrase : sur quoi porte la séance.' },
+          duree_min: { type: 'integer' },
+        },
+      },
+    },
+  },
+};
+
+export function getPlan(mondayKey) {
+  try { return JSON.parse(localStorage.getItem(PLAN_KEY + mondayKey)); } catch { return null; }
+}
+
+function planPrompt(situation, adapting) {
+  return `${adapting ? 'Adapte' : 'Construis'} mon programme d'entraînement pour la semaine en cours (lundi à dimanche).
+
+# Situation
+
+${situation}
+
+Règles :
+- Le nombre total de séances de la semaine est celui indiqué dans la situation (ma moyenne récente). Répartis-les entre natation, vélo et course selon mon objectif, mes points faibles et mes habitudes.
+- Les séances déjà faites cette semaine font partie du programme : garde-les sur leur jour réel, avec un titre qui décrit ce que j'ai fait.
+- Pour les jours passés sans séance, n'invente rien. Place les séances restantes sur les jours à venir (aujourd'hui compris).
+- Évite si possible le même sport deux jours de suite, garde au moins un jour sans séance, et une seule séance clé intense par sport.
+- Durées réalistes par rapport à mes volumes récents (pas plus de 10 à 15 % au-dessus de ma semaine habituelle).
+${adapting ? '- Je n\'ai pas suivi le programme précédent à la lettre (voir le suivi) : réorganise les jours restants en conséquence, sans essayer de rattraper toutes les séances manquées.' : ''}`;
+}
+
+export async function generatePlan(mondayKey, situation, context, adapting, onProgress) {
+  const model = getModel();
+  const final = await streamClaude({
+    model,
+    system: systemFor(context),
+    messages: [{ role: 'user', content: planPrompt(situation, adapting) }],
+    format: { type: 'json_schema', schema: PLAN_SCHEMA },
+  }, onProgress);
+  let data;
+  try { data = JSON.parse(messageText(final)); } catch { throw new Error('Programme illisible, réessaie.'); }
+  const plan = {
+    resume: data.resume,
+    sessions: data.seances
+      .filter(x => SPORT_FROM_FR[x.sport])
+      .map(x => ({ day: DAYS.indexOf(x.jour), sport: SPORT_FROM_FR[x.sport], title: x.titre, content: x.contenu, minutes: x.duree_min }))
+      .sort((a, b) => a.day - b.day),
+    model,
+    at: Date.now(),
+  };
+  try { localStorage.setItem(PLAN_KEY + mondayKey, JSON.stringify(plan)); } catch { /* stockage plein */ }
+  return plan;
+}
+
 // ---------- Prochaine séance conseillée ----------
 
 const NEXT_KEY = 'trisuivi.next.';
 
-// `stamp` change dès qu'une nouvelle activité arrive ou que le jour change :
-// la suggestion en cache n'est alors plus proposée.
+// `stamp` change dès qu'une nouvelle activité arrive, que le jour, le programme
+// ou les options (jour prévu, temps disponible) changent : le cache n'est alors plus proposé.
 export function cachedNext(sport, stamp) {
   try {
     const c = JSON.parse(localStorage.getItem(NEXT_KEY + sport));
@@ -271,10 +344,14 @@ export function cachedNext(sport, stamp) {
   } catch { return null; }
 }
 
-function nextPrompt(sport, situation) {
+function nextPrompt(sport, situation, hasPlan) {
   const label = SPORTS[sport].label.toLowerCase();
-  return `Propose ma prochaine séance de ${label}, à faire aujourd'hui ou demain.
+  return `Propose ma séance de ${label} pour le jour indiqué dans la situation.
 Tiens compte de ma situation ci-dessous, de mes séances récentes dans les trois sports (récupération, charge), de mes allures réelles et de mon objectif.
+${hasPlan ? `
+Reste cohérent avec mon programme de la semaine : si une séance de ${label} y est prévue ce jour-là ou à un jour proche, développe-la en détail. Mais adapte-toi au suivi réel : si j'ai manqué une séance, si j'ai fait autre chose que prévu ou plus ou moins que prévu, ajuste le contenu ou l'intensité (sans chercher à tout rattraper). Si tu t'écartes du programme, dis-le en une phrase.
+` : ''}
+Si un temps disponible est indiqué, la séance doit tenir dedans, échauffement et retour au calme compris.
 
 # Situation
 
@@ -288,17 +365,17 @@ Réponds uniquement avec ce format :
 - Échauffement : …
 - Corps de séance : … (allures ou intensités chiffrées à partir de mes allures habituelles${sport === 'swim' ? ', séries en mètres avec récupération' : ''})
 - Retour au calme : …
-**Pourquoi maintenant** : une ou deux phrases.
+**Pourquoi** : une ou deux phrases.
 
-Si un jour de repos est plus judicieux, dis-le d'abord en une phrase, puis donne quand même la séance pour le jour suivant.`;
+Si un jour de repos est plus judicieux ce jour-là, dis-le d'abord en une phrase, puis donne quand même la séance.`;
 }
 
-export async function suggestNext(sport, situation, context, stamp, onText) {
+export async function suggestNext(sport, situation, context, stamp, hasPlan, onText) {
   const model = getModel();
   const final = await streamClaude({
     model,
     system: systemFor(context),
-    messages: [{ role: 'user', content: nextPrompt(sport, situation) }],
+    messages: [{ role: 'user', content: nextPrompt(sport, situation, hasPlan) }],
   }, onText);
   const result = { text: messageText(final), model, at: Date.now(), stamp };
   try { localStorage.setItem(NEXT_KEY + sport, JSON.stringify(result)); } catch { /* stockage plein */ }
