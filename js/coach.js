@@ -292,6 +292,10 @@ export function getPlan(mondayKey) {
   try { return JSON.parse(localStorage.getItem(PLAN_KEY + mondayKey)); } catch { return null; }
 }
 
+export function savePlan(mondayKey, plan) {
+  try { localStorage.setItem(PLAN_KEY + mondayKey, JSON.stringify(plan)); } catch { /* stockage plein */ }
+}
+
 function planPrompt(situation, { adapting, next }) {
   const rules = next
     ? `- Le programme couvre toute la semaine prochaine, du lundi au dimanche.
@@ -305,7 +309,8 @@ function planPrompt(situation, { adapting, next }) {
 ${situation}
 
 Règles :
-- Prévois exactement le nombre total de séances indiqué dans la situation (je l'ai choisi). Répartis-les entre natation, vélo et course selon mon objectif, mes points faibles et mes habitudes.
+- Prévois exactement le nombre total de séances indiqué dans la situation (je l'ai choisi). Répartis-les entre les sports actifs indiqués dans la situation, selon mon objectif, mes points faibles et mes habitudes. Ne programme aucune séance d'un sport désactivé.
+- Les séances imposées de la situation sont obligatoires : garde-les exactement au jour et dans le sport indiqués (avec la durée indiquée si elle est précisée), et choisis leur contenu. Elles comptent dans le nombre total ; organise les autres séances autour d'elles.
 ${rules}
 - Évite si possible le même sport deux jours de suite, garde au moins un jour sans séance (sauf si le nombre de séances l'impose : deux séances le même jour sont alors possibles), et une seule séance clé intense par sport.
 - Durées réalistes par rapport à mes volumes récents (pas plus de 10 à 15 % au-dessus de ma semaine habituelle, sauf si j'ai demandé plus de séances que d'habitude : augmente alors le nombre, pas la durée de chaque séance).

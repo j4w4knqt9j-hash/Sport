@@ -747,11 +747,27 @@ function habitualSessions(acts) {
   return { weeks, total: Math.max(1, Math.round(avg('all'))), avg };
 }
 
+// Sports à programmer : choix mémorisé et réutilisé les semaines suivantes
+function planSports() {
+  const s = loadPrefs().planSports;
+  return Array.isArray(s) && s.length ? s : [...SPORT_KEYS];
+}
+
+// Séances imposées à la main pour une semaine : [{ day, sport, minutes }]
+function getPins(key) {
+  try { return JSON.parse(localStorage.getItem('trisuivi.pins.' + key)) || []; } catch { return []; }
+}
+
+function savePins(key, pins) {
+  localStorage.setItem('trisuivi.pins.' + key, JSON.stringify(pins));
+}
+
 // Nombre de séances choisi pour la semaine `w` : réglé à la main, sinon celui du programme, sinon l'habitude
 function planCount(acts, w) {
   const key = isoDay(currentMonday(w));
   state.planCount ??= {};
-  return state.planCount[key] ?? Coach.getPlan(key)?.count ?? habitualSessions(acts).total;
+  const n = state.planCount[key] ?? Coach.getPlan(key)?.count ?? habitualSessions(acts).total;
+  return Math.max(n, getPins(key).length, 1);
 }
 
 function doneLines(acts, key) {
@@ -771,6 +787,13 @@ function planSituation(acts, adapting, w, count) {
     'Mes 3 dernières semaines complètes :',
     ...h.weeks.map(x => `- ${fmtWeekRange(x.monday)} : ${x.totals.all.count} séances (natation ${x.totals.swim.count}, vélo ${x.totals.ride.count}, course ${x.totals.run.count}), ${fmtDuration(x.totals.all.time)}`),
   ];
+  const active = planSports();
+  const off = SPORT_KEYS.filter(k => !active.includes(k));
+  lines.push(`Sports actifs à programmer : ${active.map(k => SPORTS[k].label.toLowerCase()).join(', ')}${off.length ? ` (désactivé${off.length > 1 ? 's' : ''} : ${off.map(k => SPORTS[k].label.toLowerCase()).join(', ')})` : ''}.`);
+  const pins = getPins(isoDay(monday));
+  if (pins.length) {
+    lines.push('Séances imposées (obligatoires) :', ...pins.map(p => `- ${Coach.DAYS[p.day]} · ${SPORTS[p.sport].label}${p.minutes ? ` · ${p.minutes} min` : ' · durée libre'}`));
+  }
   const done = doneLines(acts, curKey);
   lines.push(done.length ? 'Déjà fait cette semaine :' : 'Rien de fait cette semaine pour l\'instant.', ...done);
   const curPlan = Coach.getPlan(curKey);
@@ -914,6 +937,34 @@ function renderSheet() {
   el.querySelector('.sheet-body').scrollTop = scroll;
 }
 
+function listFr(items) {
+  return items.length > 1 ? `${items.slice(0, -1).join(', ')} et ${items.at(-1)}` : items[0] || '';
+}
+
+function planOptions(w) {
+  const key = isoDay(currentMonday(w));
+  const active = planSports();
+  const pins = getPins(key);
+  const dis = state.busy ? 'disabled' : '';
+  const t = w === 0 ? todayIndex() : 0;
+  const dayOpts = Coach.DAYS.map((d, i) => i < t ? '' : `<option value="${i}">${d.charAt(0).toUpperCase() + d.slice(1)} ${addDays(currentMonday(w), i).getUTCDate()}</option>`).join('');
+  return `
+    <div class="opt-label">Sports à programmer</div>
+    <div class="chips sport-toggles">
+      ${SPORT_KEYS.map(k => `<button data-sheet="toggle-sport" data-sport="${k}" class="${active.includes(k) ? 'active' : ''}" ${dis}>${active.includes(k) ? '✓ ' : ''}${SPORTS[k].icon} ${SPORTS[k].label}</button>`).join('')}
+    </div>
+    <div class="opt-label">Séances imposées</div>
+    ${pins.length ? `<div class="pins">${pins.map((p, i) => `
+      <div class="pin">${iconBox(p.sport)}<span><b>${Coach.DAYS[p.day].charAt(0).toUpperCase() + Coach.DAYS[p.day].slice(1)}</b> · ${SPORTS[p.sport].label}${p.minutes ? ` · ${fmtDuration(p.minutes * 60)}` : ''}</span>
+        <button class="link" data-sheet="del-pin" data-i="${i}" ${dis}>Retirer</button></div>`).join('')}</div>` : '<p class="muted pin-hint">Ex. : piscine le mardi. Le coach construit le reste autour.</p>'}
+    <div class="pin-add">
+      <select id="pin-day" ${dis}>${dayOpts}</select>
+      <select id="pin-sport" ${dis}>${SPORT_KEYS.map(k => `<option value="${k}">${SPORTS[k].icon} ${SPORTS[k].label}</option>`).join('')}</select>
+      <select id="pin-min" ${dis}>${[0, 30, 45, 60, 90, 120].map(m => `<option value="${m}">${m ? fmtDuration(m * 60) : 'Durée libre'}</option>`).join('')}</select>
+      <button class="btn ghost" data-sheet="add-pin" ${dis}>📌 Ajouter</button>
+    </div>`;
+}
+
 function planSheet() {
   const acts = activities();
   const w = state.sheet.week || 0;
@@ -924,6 +975,7 @@ function planSheet() {
   const h = habitualSessions(acts);
   const count = planCount(acts, w);
   const busy = state.busy ? 'disabled' : '';
+  const options = planOptions(w);
   const weekTabs = `
     <div class="segmented full">
       <button data-sheet="plan-week" data-week="0" class="${w === 0 ? 'active' : ''}">Cette semaine</button>
@@ -942,8 +994,8 @@ function planSheet() {
   if (!Coach.getApiKey()) body = NO_KEY;
   else if (state.busy?.kind === 'plan' && state.busy.week === w) body = typing('Le coach prépare ton programme…');
   else if (!plan) {
-    body = `${stepper}
-      <p>Le coach répartit <b>${count} séance${count > 1 ? 's' : ''}</b> entre natation, vélo et course, avec le thème de chaque séance.</p>
+    body = `${options}${stepper}
+      <p>Le coach répartit <b>${count} séance${count > 1 ? 's' : ''}</b> entre ${listFr(planSports().map(k => SPORTS[k].label.toLowerCase()))}${getPins(isoDay(monday)).length ? ', en gardant tes séances imposées' : ''}, avec le thème de chaque séance.</p>
       <p class="muted">${w === 0 ? 'Les séances déjà faites cette semaine sont prises en compte.' : 'Il tient compte de ta semaine en cours et de son programme pour enchaîner.'}</p>
       <button class="btn primary" data-sheet="gen-plan" ${busy}>✨ Générer le programme</button>`;
   } else {
@@ -957,7 +1009,7 @@ function planSheet() {
         <div class="plan-row ${x.status}" ${x.status === 'done' ? '' : `data-sheet="open-next" data-sport="${x.sport}" data-day="${i + 7 * w}"`}>
           ${iconBox(x.sport)}
           <div>
-            <div class="plan-title">${esc(x.title)} <span class="muted">· ${fmtDuration(x.minutes * 60)}</span></div>
+            <div class="plan-title">${x.pinned ? '📌 ' : ''}${esc(x.title)} <span class="muted">· ${fmtDuration(x.minutes * 60)}</span></div>
             <div class="plan-content">${esc(x.content)}</div>
             ${x.act ? `<div class="plan-real">${fmtDistance(x.act.distance, x.sport)} en ${fmtDuration(x.act.time)}</div>` : ''}
             ${sentBadge(!x.act && Icu.getSent(Icu.externalId(isoDay(addDays(monday, i)), x.sport)))}
@@ -986,6 +1038,7 @@ function planSheet() {
       ${days}
       <p class="muted">Touche une séance pour la détailler.</p>
       ${weekWatchBlock(st)}
+      ${options}
       ${stepper}
       ${w === 0 ? `<button class="btn ${changed ? 'ghost' : 'primary'}" data-sheet="adapt-plan" ${busy}>Adapter à ma semaine réelle${changed ? ` (${count} séances)` : ''}</button>` : ''}
       <button class="btn ${changed ? 'primary' : 'ghost'}" data-sheet="gen-plan" ${busy}>Refaire le programme avec ${count} séance${count > 1 ? 's' : ''}</button>
@@ -1202,8 +1255,23 @@ async function runPlan(adapting) {
   state.busy = { kind: 'plan', week: w };
   renderSheet();
   try {
-    await Coach.generatePlan(isoDay(currentMonday(w)), planSituation(acts, adapting, w, count), coachContext(acts), { adapting, next: w === 1, count });
-    delete state.planCount[isoDay(currentMonday(w))];
+    const key = isoDay(currentMonday(w));
+    const plan = await Coach.generatePlan(key, planSituation(acts, adapting, w, count), coachContext(acts), { adapting, next: w === 1, count });
+    // si l'IA a oublié une séance imposée, on l'ajoute quand même
+    const missing = getPins(key).filter(p => !plan.sessions.some(x => x.day === p.day && x.sport === p.sport));
+    if (missing.length) {
+      plan.sessions.push(...missing.map(p => ({ day: p.day, sport: p.sport, title: `Séance de ${SPORTS[p.sport].label.toLowerCase()}`, content: 'Séance imposée : contenu à définir avec le coach.', minutes: p.minutes || 45 })));
+      plan.sessions.sort((a, b) => a.day - b.day);
+    }
+    getPins(key).forEach(p => {
+      const x = plan.sessions.find(y => y.day === p.day && y.sport === p.sport);
+      if (x) {
+        x.pinned = true;
+        if (p.minutes) x.minutes = p.minutes;
+      }
+    });
+    Coach.savePlan(key, plan);
+    delete state.planCount[key];
     // les suggestions de séance s'aligneront sur le nouveau programme
     state.nextOpts = {};
   } catch (e) {
@@ -1236,6 +1304,31 @@ document.addEventListener('click', e => {
     openNext(b.dataset.sport, Math.max(0, Number(b.dataset.day) - todayIndex()), 'plan');
   }
   else if (action === 'back-plan') { state.sheet = { type: 'plan', week: state.planWeek || 0 }; renderSheet(); }
+  else if (action === 'toggle-sport') {
+    const cur = planSports();
+    const k = b.dataset.sport;
+    const next = cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k];
+    if (!next.length) return toast('Garde au moins un sport');
+    savePrefs({ planSports: SPORT_KEYS.filter(x => next.includes(x)) });
+    renderSheet();
+  }
+  else if (action === 'add-pin' || action === 'del-pin') {
+    const key = isoDay(currentMonday(sh.week || 0));
+    const pins = getPins(key);
+    if (action === 'del-pin') pins.splice(Number(b.dataset.i), 1);
+    else {
+      const p = {
+        day: Number(document.getElementById('pin-day').value),
+        sport: document.getElementById('pin-sport').value,
+        minutes: Number(document.getElementById('pin-min').value) || null,
+      };
+      if (pins.some(x => x.day === p.day && x.sport === p.sport)) return toast('Cette séance est déjà imposée');
+      pins.push(p);
+      pins.sort((a, c) => a.day - c.day);
+    }
+    savePins(key, pins);
+    renderSheet();
+  }
   else if (action === 'plan-week') { state.sheet = { type: 'plan', week: Number(b.dataset.week) }; renderSheet(); }
   else if (action === 'count') {
     const acts = activities();

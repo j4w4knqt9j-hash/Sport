@@ -495,3 +495,13 @@ body.no-scroll { overflow: hidden; }
 .lg.done { background: #fff; }
 .lg.planned { border: 1.5px dashed #fff; }
 .hero-cta { margin-top: 10px; padding: 9px 12px; font-size: 13px; }
+
+/* ---------- Options du programme ---------- */
+.sport-toggles button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.pins { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.pin { display: grid; grid-template-columns: 32px 1fr auto; gap: 10px; align-items: center; padding: 6px 10px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); font-size: 14px; }
+.pin .sport-icon { width: 32px; height: 32px; font-size: 16px; border-radius: 10px; }
+.pin-hint { margin: 0 0 8px; }
+.pin-add { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 4px; }
+.pin-add select { padding: 9px 8px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 14px; min-width: 0; }
+.pin-add .btn { grid-column: 1 / -1; margin-top: 0; padding: 10px; }
