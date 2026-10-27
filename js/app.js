@@ -41,6 +41,7 @@ const state = {
   busy: null,
   partial: '',
   nextOpts: {},
+  planCount: {},
 };
 
 let charts = [];
@@ -673,9 +674,9 @@ function fmtMinutes(m) {
   return m == null ? 'Non précisé' : fmtDuration(m * 60);
 }
 
-// Rapproche le programme des sorties réellement faites cette semaine
-function planStatus(plan, acts) {
-  const key = isoDay(currentMonday(0));
+// Rapproche le programme des sorties réellement faites dans la semaine `w` (0 = en cours, 1 = prochaine)
+function planStatus(plan, acts, w = 0) {
+  const key = isoDay(currentMonday(w));
   const week = acts.filter(a => a.week === key).map(a => ({ a, day: dayOfAct(a), used: false }));
   const sessions = plan.sessions.map(x => ({ ...x, act: null }));
   // d'abord le jour exact, puis à un ou deux jours près
@@ -688,7 +689,7 @@ function planStatus(plan, acts) {
       if (cand) { cand.act = w.a; w.used = true; }
     }
   }
-  const t = todayIndex();
+  const t = w === 0 ? todayIndex() : -1;
   sessions.forEach(x => {
     x.status = x.act ? 'done' : x.day < t ? 'missed' : x.day === t ? 'today' : 'todo';
   });
@@ -710,30 +711,47 @@ function planLines(plan, status) {
   return lines;
 }
 
-// Nombre de séances habituel : moyenne des 4 dernières semaines complètes
+// Nombre de séances habituel : moyenne des 3 dernières semaines complètes
 function habitualSessions(acts) {
   const monday = currentMonday(0);
-  const weeks = weeklySeries(acts, addDays(monday, -7), 4);
+  const weeks = weeklySeries(acts, addDays(monday, -7), 3);
   const avg = k => weeks.reduce((t, w) => t + w.totals[k].count, 0) / weeks.length;
   return { weeks, total: Math.max(1, Math.round(avg('all'))), avg };
 }
 
-function planSituation(acts, adapting) {
+// Nombre de séances choisi pour la semaine `w` : réglé à la main, sinon celui du programme, sinon l'habitude
+function planCount(acts, w) {
+  const key = isoDay(currentMonday(w));
+  state.planCount ??= {};
+  return state.planCount[key] ?? Coach.getPlan(key)?.count ?? habitualSessions(acts).total;
+}
+
+function doneLines(acts, key) {
+  return acts.filter(a => a.week === key).sort((a, b) => a.local.localeCompare(b.local))
+    .map(a => `- ${Coach.DAYS[dayOfAct(a)]} · ${SPORTS[a.sport].label} · « ${a.name.slice(0, 60)} », ${fmtDistance(a.distance, a.sport)} en ${fmtDuration(a.time)}${a.effort != null ? `, effort ${a.effort}` : ''}`);
+}
+
+function planSituation(acts, adapting, w, count) {
   const t = todayIndex();
   const h = habitualSessions(acts);
+  const monday = currentMonday(w);
+  const curKey = isoDay(currentMonday(0));
   const lines = [
-    `Aujourd'hui : ${Coach.DAYS[t]} (jour ${t + 1}/7 de la semaine).`,
-    `Nombre de séances à prévoir sur la semaine : ${h.total} (ma moyenne des 4 dernières semaines : ${fmtNumber(h.avg('all'))} ; natation ${fmtNumber(h.avg('swim'))}, vélo ${fmtNumber(h.avg('ride'))}, course ${fmtNumber(h.avg('run'))}).`,
-    'Mes 4 dernières semaines :',
-    ...h.weeks.map(w => `- ${fmtWeekRange(w.monday)} : ${w.totals.all.count} séances (natation ${w.totals.swim.count}, vélo ${w.totals.ride.count}, course ${w.totals.run.count}), ${fmtDuration(w.totals.all.time)}`),
+    `Aujourd'hui : ${Coach.DAYS[t]} (jour ${t + 1}/7 de la semaine en cours).`,
+    `Semaine à programmer : ${w === 0 ? 'la semaine en cours' : 'la semaine prochaine'}, du lundi ${fmtDayMonth(monday)} au dimanche ${fmtDayMonth(addDays(monday, 6))}`,
+    `Nombre de séances à prévoir sur la semaine : ${count}, choisi par moi (ma moyenne des 3 dernières semaines : ${fmtNumber(h.avg('all'))} ; natation ${fmtNumber(h.avg('swim'))}, vélo ${fmtNumber(h.avg('ride'))}, course ${fmtNumber(h.avg('run'))}).`,
+    'Mes 3 dernières semaines complètes :',
+    ...h.weeks.map(x => `- ${fmtWeekRange(x.monday)} : ${x.totals.all.count} séances (natation ${x.totals.swim.count}, vélo ${x.totals.ride.count}, course ${x.totals.run.count}), ${fmtDuration(x.totals.all.time)}`),
   ];
-  const key = isoDay(currentMonday(0));
-  const done = acts.filter(a => a.week === key).sort((a, b) => a.local.localeCompare(b.local));
-  lines.push(done.length ? 'Déjà fait cette semaine :' : 'Rien de fait cette semaine pour l\'instant.');
-  done.forEach(a => lines.push(`- ${Coach.DAYS[dayOfAct(a)]} · ${SPORTS[a.sport].label} · « ${a.name.slice(0, 60)} », ${fmtDistance(a.distance, a.sport)} en ${fmtDuration(a.time)}${a.effort != null ? `, effort ${a.effort}` : ''}`));
-  const plan = Coach.getPlan(key);
+  const done = doneLines(acts, curKey);
+  lines.push(done.length ? 'Déjà fait cette semaine :' : 'Rien de fait cette semaine pour l\'instant.', ...done);
+  const curPlan = Coach.getPlan(curKey);
+  if (w === 1 && curPlan) {
+    lines.push('', 'Programme de la semaine en cours et suivi (pour enchaîner de façon cohérente) :', ...planLines(curPlan, planStatus(curPlan, acts, 0)));
+  }
+  const plan = Coach.getPlan(isoDay(monday));
   if (adapting && plan) {
-    lines.push('', 'Programme précédent et suivi :', ...planLines(plan, planStatus(plan, acts)));
+    lines.push('', 'Programme précédent de cette semaine et suivi :', ...planLines(plan, planStatus(plan, acts, w)));
   }
   return lines.join('\n');
 }
@@ -752,6 +770,7 @@ function nextSituation(acts, sport, opts) {
   const t = todayIndex();
   const target = addDays(today, opts.offset);
   const targetDay = (target.getUTCDay() + 6) % 7;
+  const targetWeek = t + opts.offset > 6 ? 1 : 0;
   const sorted = [...acts].sort((a, b) => b.local.localeCompare(a.local));
   const lines = [
     `Sport demandé : ${label}`,
@@ -774,12 +793,11 @@ function nextSituation(acts, sport, opts) {
   }
   const last = sorted[0];
   if (last) lines.push(`Dernière séance tous sports : ${SPORTS[last.sport].label.toLowerCase()} ${daysAgo(last)}${last.effort != null ? ` (effort ${last.effort})` : ''}.`);
-  const plan = Coach.getPlan(isoDay(monday));
-  if (plan) {
-    lines.push('', `Programme de la semaine : ${plan.resume}`, ...planLines(plan, planStatus(plan, acts)));
-  } else {
-    lines.push('', 'Pas de programme hebdomadaire établi.');
-  }
+  const curPlan = Coach.getPlan(isoDay(monday));
+  const nextPlan = Coach.getPlan(isoDay(currentMonday(1)));
+  if (curPlan) lines.push('', `Programme de la semaine en cours : ${curPlan.resume}`, ...planLines(curPlan, planStatus(curPlan, acts, 0)));
+  if (targetWeek === 1 && nextPlan) lines.push('', `Programme de la semaine prochaine (celle de la séance) : ${nextPlan.resume}`, ...planLines(nextPlan, planStatus(nextPlan, acts, 1)));
+  if (!(targetWeek === 0 ? curPlan : nextPlan)) lines.push('', 'Pas de programme établi pour la semaine de cette séance.');
   return lines.join('\n');
 }
 
@@ -792,18 +810,22 @@ function nextOpts(sport, acts) {
   state.nextOpts ??= {};
   if (!state.nextOpts[sport]) {
     // par défaut : la prochaine séance de ce sport prévue au programme, sinon aujourd'hui
-    const plan = Coach.getPlan(isoDay(currentMonday(0)));
     const t = todayIndex();
-    const planned = plan && planStatus(plan, acts).sessions.find(x => x.sport === sport && (x.status === 'today' || x.status === 'todo'));
-    state.nextOpts[sport] = { offset: planned ? planned.day - t : 0, time: null };
+    let offset = 0;
+    for (const w of [0, 1]) {
+      const plan = Coach.getPlan(isoDay(currentMonday(w)));
+      const planned = plan && planStatus(plan, acts, w).sessions.find(x => x.sport === sport && x.status !== 'done' && x.status !== 'missed');
+      if (planned) { offset = planned.day + 7 * w - t; break; }
+    }
+    state.nextOpts[sport] = { offset, time: null };
   }
   return state.nextOpts[sport];
 }
 
 function nextKey(sport, acts) {
   const o = nextOpts(sport, acts);
-  const plan = Coach.getPlan(isoDay(currentMonday(0)));
-  return `${nextStamp(acts)}|${o.offset}|${o.time}|${plan?.at || ''}`;
+  const plans = [0, 1].map(w => Coach.getPlan(isoDay(currentMonday(w)))?.at || '');
+  return `${nextStamp(acts)}|${o.offset}|${o.time}|${plans.join('|')}`;
 }
 
 function openSheet(sheet) {
@@ -864,27 +886,45 @@ function renderSheet() {
 
 function planSheet() {
   const acts = activities();
-  const monday = currentMonday(0);
+  const w = state.sheet.week || 0;
+  const monday = currentMonday(w);
   const plan = Coach.getPlan(isoDay(monday));
   const icon = '<div class="sport-icon" style="background:#fc4c0222">🗓️</div>';
   const title = `Semaine du ${fmtDayMonth(monday)}`;
+  const h = habitualSessions(acts);
+  const count = planCount(acts, w);
+  const busy = state.busy ? 'disabled' : '';
+  const weekTabs = `
+    <div class="segmented full">
+      <button data-sheet="plan-week" data-week="0" class="${w === 0 ? 'active' : ''}">Cette semaine</button>
+      <button data-sheet="plan-week" data-week="1" class="${w === 1 ? 'active' : ''}">Semaine prochaine</button>
+    </div>`;
+  const stepper = `
+    <div class="stepper-row">
+      <div><strong>Nombre de séances</strong><small>Moyenne de tes 3 dernières semaines : ${fmtNumber(h.avg('all'))}</small></div>
+      <div class="stepper">
+        <button data-sheet="count" data-delta="-1" ${count <= 1 || state.busy ? 'disabled' : ''} aria-label="Moins">−</button>
+        <b>${count}</b>
+        <button data-sheet="count" data-delta="1" ${count >= 14 || state.busy ? 'disabled' : ''} aria-label="Plus">+</button>
+      </div>
+    </div>`;
   let body;
   if (!Coach.getApiKey()) body = NO_KEY;
-  else if (state.busy?.kind === 'plan') body = typing('Le coach prépare ton programme…');
+  else if (state.busy?.kind === 'plan' && state.busy.week === w) body = typing('Le coach prépare ton programme…');
   else if (!plan) {
-    const h = habitualSessions(acts);
-    body = `<p>Le coach répartit <b>${h.total} séances</b> (ta moyenne des 4 dernières semaines) entre natation, vélo et course, avec le thème de chaque séance.</p>
-      <p class="muted">Les séances déjà faites cette semaine sont prises en compte.</p>
-      <button class="btn primary" data-sheet="gen-plan" ${state.busy ? 'disabled' : ''}>✨ Générer le programme</button>`;
+    body = `${stepper}
+      <p>Le coach répartit <b>${count} séance${count > 1 ? 's' : ''}</b> entre natation, vélo et course, avec le thème de chaque séance.</p>
+      <p class="muted">${w === 0 ? 'Les séances déjà faites cette semaine sont prises en compte.' : 'Il tient compte de ta semaine en cours et de son programme pour enchaîner.'}</p>
+      <button class="btn primary" data-sheet="gen-plan" ${busy}>✨ Générer le programme</button>`;
   } else {
-    const st = planStatus(plan, acts);
-    const t = todayIndex();
+    const st = planStatus(plan, acts, w);
+    const t = w === 0 ? todayIndex() : -1;
     const badge = { done: '<span class="badge done">✓ Fait</span>', missed: '<span class="badge missed">Manquée</span>', today: '<span class="badge today">Aujourd\'hui</span>', todo: '' };
     const days = Coach.DAYS.map((d, i) => {
       const items = st.sessions.filter(x => x.day === i);
       const extras = st.extras.filter(a => dayOfAct(a) === i);
       const rows = items.map(x => `
-        <div class="plan-row ${x.status}" ${x.status === 'done' ? '' : `data-sheet="open-next" data-sport="${x.sport}" data-day="${i}"`}>
+        <div class="plan-row ${x.status}" ${x.status === 'done' ? '' : `data-sheet="open-next" data-sport="${x.sport}" data-day="${i + 7 * w}"`}>
           ${iconBox(x.sport)}
           <div>
             <div class="plan-title">${esc(x.title)} <span class="muted">· ${fmtDuration(x.minutes * 60)}</span></div>
@@ -906,15 +946,20 @@ function planSheet() {
         ${rows || '<div class="plan-rest">Repos</div>'}
       </div>`;
     }).join('');
+    const changed = count !== (plan.count ?? st.sessions.length);
     body = `
       <p class="plan-resume">${esc(plan.resume)}</p>
-      <div class="plan-progress"><b>${st.done}/${st.sessions.length}</b> séances faites${st.missed ? ` · <span class="missed-txt">${st.missed} manquée${st.missed > 1 ? 's' : ''}</span>` : ''}</div>
+      <div class="plan-progress">${w === 0
+        ? `<b>${st.done}/${st.sessions.length}</b> séances faites${st.missed ? ` · <span class="missed-txt">${st.missed} manquée${st.missed > 1 ? 's' : ''}</span>` : ''}`
+        : `<b>${st.sessions.length}</b> séances prévues`}</div>
       ${days}
       <p class="muted">Touche une séance pour la détailler.</p>
-      <button class="btn ghost" data-sheet="adapt-plan" ${state.busy ? 'disabled' : ''}>Adapter le programme à ma semaine réelle</button>
+      ${stepper}
+      ${w === 0 ? `<button class="btn ${changed ? 'ghost' : 'primary'}" data-sheet="adapt-plan" ${busy}>Adapter à ma semaine réelle${changed ? ` (${count} séances)` : ''}</button>` : ''}
+      <button class="btn ${changed ? 'primary' : 'ghost'}" data-sheet="gen-plan" ${busy}>Refaire le programme avec ${count} séance${count > 1 ? 's' : ''}</button>
       <div class="ai-foot"><span class="muted">${esc(Coach.modelLabel(plan.model))} · ${new Date(plan.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span></div>`;
   }
-  return sheetFrame(icon, 'Programme de la semaine', title, body);
+  return sheetFrame(icon, 'Programme', title, weekTabs + body);
 }
 
 function nextSheet(sport) {
@@ -922,17 +967,18 @@ function nextSheet(sport) {
   const o = nextOpts(sport, acts);
   const today = todayUTC();
   const t = todayIndex();
-  const dayChips = Array.from({ length: 7 }, (_, i) => {
+  const dayChips = Array.from({ length: 14 - t }, (_, i) => {
     const d = addDays(today, i);
     const label = i === 0 ? 'Auj.' : i === 1 ? 'Demain' : `${DAY_SHORT[(t + i) % 7]} ${d.getUTCDate()}`;
     return `<button data-sheet="day" data-day="${i}" class="${o.offset === i ? 'active' : ''}">${label}</button>`;
   }).join('');
   const timeChips = TIME_OPTIONS.map(m => `<button data-sheet="time" data-time="${m ?? ''}" class="${o.time === m ? 'active' : ''}">${fmtMinutes(m)}</button>`).join('');
 
-  // séance prévue au programme ce jour-là
-  const plan = Coach.getPlan(isoDay(currentMonday(0)));
-  const planned = plan && t + o.offset <= 6
-    && planStatus(plan, acts).sessions.find(x => x.sport === sport && x.day === t + o.offset && x.status !== 'done');
+  // séance prévue au programme ce jour-là (semaine en cours ou prochaine)
+  const tw = t + o.offset > 6 ? 1 : 0;
+  const plan = Coach.getPlan(isoDay(currentMonday(tw)));
+  const planned = plan
+    && planStatus(plan, acts, tw).sessions.find(x => x.sport === sport && x.day === t + o.offset - 7 * tw && x.status !== 'done');
   const hint = planned
     ? `<div class="plan-hint">🗓️ Au programme : <b>${esc(planned.title)}</b> · ${fmtDuration(planned.minutes * 60)}</div>`
     : plan ? '<div class="plan-hint muted">Pas de séance de ce sport prévue ce jour-là au programme.</div>' : '';
@@ -987,10 +1033,13 @@ async function runNext(sport) {
 async function runPlan(adapting) {
   if (state.busy) return;
   const acts = activities();
-  state.busy = { kind: 'plan' };
+  const w = state.sheet.week || 0;
+  const count = planCount(acts, w);
+  state.busy = { kind: 'plan', week: w };
   renderSheet();
   try {
-    await Coach.generatePlan(isoDay(currentMonday(0)), planSituation(acts, adapting), coachContext(acts), adapting, () => {});
+    await Coach.generatePlan(isoDay(currentMonday(w)), planSituation(acts, adapting, w, count), coachContext(acts), { adapting, next: w === 1, count });
+    delete state.planCount[isoDay(currentMonday(w))];
     // les suggestions de séance s'aligneront sur le nouveau programme
     state.nextOpts = {};
   } catch (e) {
@@ -1012,8 +1061,18 @@ document.addEventListener('click', e => {
   if (action === 'gen-next') runNext(sh.sport);
   else if (action === 'gen-plan') runPlan(false);
   else if (action === 'adapt-plan') runPlan(true);
-  else if (action === 'open-next') openNext(b.dataset.sport, Math.max(0, Number(b.dataset.day) - todayIndex()), 'plan');
-  else if (action === 'back-plan') { state.sheet = { type: 'plan' }; renderSheet(); }
+  else if (action === 'open-next') {
+    state.planWeek = sh.week || 0;
+    openNext(b.dataset.sport, Math.max(0, Number(b.dataset.day) - todayIndex()), 'plan');
+  }
+  else if (action === 'back-plan') { state.sheet = { type: 'plan', week: state.planWeek || 0 }; renderSheet(); }
+  else if (action === 'plan-week') { state.sheet = { type: 'plan', week: Number(b.dataset.week) }; renderSheet(); }
+  else if (action === 'count') {
+    const acts = activities();
+    const w = sh.week || 0;
+    state.planCount[isoDay(currentMonday(w))] = Math.min(14, Math.max(1, planCount(acts, w) + Number(b.dataset.delta)));
+    renderSheet();
+  }
   else if (action === 'day' || action === 'time') {
     const o = nextOpts(sh.sport, activities());
     if (action === 'day') o.offset = Number(b.dataset.day);
@@ -1290,7 +1349,7 @@ $view.addEventListener('click', e => {
   if (!t) {
     const card = e.target.closest('.sport-card[data-next]');
     if (card) return openNext(card.dataset.next);
-    if (e.target.closest('[data-plan]')) return openSheet({ type: 'plan' });
+    if (e.target.closest('[data-plan]')) return openSheet({ type: 'plan', week: 0 });
     const row = e.target.closest('.act[data-open]');
     if (row) {
       state.listScroll = window.scrollY;

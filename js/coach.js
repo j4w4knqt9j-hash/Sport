@@ -292,30 +292,34 @@ export function getPlan(mondayKey) {
   try { return JSON.parse(localStorage.getItem(PLAN_KEY + mondayKey)); } catch { return null; }
 }
 
-function planPrompt(situation, adapting) {
-  return `${adapting ? 'Adapte' : 'Construis'} mon programme d'entraînement pour la semaine en cours (lundi à dimanche).
+function planPrompt(situation, { adapting, next }) {
+  const rules = next
+    ? `- Le programme couvre toute la semaine prochaine, du lundi au dimanche.
+- Enchaîne de façon cohérente avec ma semaine en cours (ce que j'ai fait et ce qui reste prévu) : pas de séance intense le lundi si le week-end est chargé, par exemple.`
+    : `- Les séances déjà faites cette semaine font partie du programme : garde-les sur leur jour réel, avec un titre qui décrit ce que j'ai fait.
+- Pour les jours passés sans séance, n'invente rien. Place les séances restantes sur les jours à venir (aujourd'hui compris).`;
+  return `${adapting ? 'Adapte' : 'Construis'} mon programme d'entraînement pour ${next ? 'la semaine prochaine' : 'la semaine en cours'} (lundi à dimanche).
 
 # Situation
 
 ${situation}
 
 Règles :
-- Le nombre total de séances de la semaine est celui indiqué dans la situation (ma moyenne récente). Répartis-les entre natation, vélo et course selon mon objectif, mes points faibles et mes habitudes.
-- Les séances déjà faites cette semaine font partie du programme : garde-les sur leur jour réel, avec un titre qui décrit ce que j'ai fait.
-- Pour les jours passés sans séance, n'invente rien. Place les séances restantes sur les jours à venir (aujourd'hui compris).
-- Évite si possible le même sport deux jours de suite, garde au moins un jour sans séance, et une seule séance clé intense par sport.
-- Durées réalistes par rapport à mes volumes récents (pas plus de 10 à 15 % au-dessus de ma semaine habituelle).
+- Prévois exactement le nombre total de séances indiqué dans la situation (je l'ai choisi). Répartis-les entre natation, vélo et course selon mon objectif, mes points faibles et mes habitudes.
+${rules}
+- Évite si possible le même sport deux jours de suite, garde au moins un jour sans séance (sauf si le nombre de séances l'impose : deux séances le même jour sont alors possibles), et une seule séance clé intense par sport.
+- Durées réalistes par rapport à mes volumes récents (pas plus de 10 à 15 % au-dessus de ma semaine habituelle, sauf si j'ai demandé plus de séances que d'habitude : augmente alors le nombre, pas la durée de chaque séance).
 ${adapting ? '- Je n\'ai pas suivi le programme précédent à la lettre (voir le suivi) : réorganise les jours restants en conséquence, sans essayer de rattraper toutes les séances manquées.' : ''}`;
 }
 
-export async function generatePlan(mondayKey, situation, context, adapting, onProgress) {
+export async function generatePlan(mondayKey, situation, context, { adapting, next, count }) {
   const model = getModel();
   const final = await streamClaude({
     model,
     system: systemFor(context),
-    messages: [{ role: 'user', content: planPrompt(situation, adapting) }],
+    messages: [{ role: 'user', content: planPrompt(situation, { adapting, next }) }],
     format: { type: 'json_schema', schema: PLAN_SCHEMA },
-  }, onProgress);
+  }, () => {});
   let data;
   try { data = JSON.parse(messageText(final)); } catch { throw new Error('Programme illisible, réessaie.'); }
   const plan = {
@@ -324,6 +328,7 @@ export async function generatePlan(mondayKey, situation, context, adapting, onPr
       .filter(x => SPORT_FROM_FR[x.sport])
       .map(x => ({ day: DAYS.indexOf(x.jour), sport: SPORT_FROM_FR[x.sport], title: x.titre, content: x.contenu, minutes: x.duree_min }))
       .sort((a, b) => a.day - b.day),
+    count,
     model,
     at: Date.now(),
   };

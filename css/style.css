@@ -439,3 +439,10 @@ body.no-scroll { overflow: hidden; }
 .badge.done { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
 .badge.missed { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
 .badge.today { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+
+.stepper-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; margin: 8px 0 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
+.stepper-row small { display: block; color: var(--muted); font-size: 12px; }
+.stepper { display: flex; align-items: center; gap: 12px; }
+.stepper b { font-size: 20px; min-width: 24px; text-align: center; }
+.stepper button { width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface-2); font-size: 20px; line-height: 1; cursor: pointer; }
+.stepper button:disabled { opacity: 0.35; }
