@@ -191,16 +191,16 @@ function renderWeek(acts) {
     </div>
 
     <div class="card hero">
-      <div class="big">${fmtDuration(cur.all.time)}</div>
-      <div class="sub">d'entraînement · sem. ${isCurrent ? 'dernière' : 'précédente'} : <b>${fmtDuration(prev.all.time)}</b></div>
-      ${prev.all.time ? `<div class="hero-bar"><i style="width:${Math.min(100, cur.all.time / prev.all.time * 100)}%"></i></div>` : ''}
-      <div class="hero-goal">${heroGoal(cur.all.time, prev.all.time, isCurrent)}</div>
-      ${isCurrent ? heroPlanCta(acts) : ''}
-      <div class="row">
-        <div><strong>${cur.all.count}</strong>séances</div>
-        <div><strong>${Math.round(cur.all.elevation)} m</strong>D+</div>
-        ${cur.all.effort ? `<div><strong>${Math.round(cur.all.effort)}</strong>effort relatif</div>` : ''}
+      <div class="hero-top">
+        <div>
+          <div class="big">${fmtDuration(cur.all.time)}</div>
+          <div class="sub">${prev.all.time ? `sur <b>${fmtDuration(prev.all.time)}</b> la sem. ${isCurrent ? 'dernière' : 'précédente'}` : `aucun entraînement la sem. ${isCurrent ? 'dernière' : 'précédente'}`} · ${cur.all.count} séance${cur.all.count > 1 ? 's' : ''}</div>
+        </div>
+        ${heroDelta(cur.all.time, prev.all.time, isCurrent)}
       </div>
+      ${prev.all.time ? `<div class="hero-bar"><i style="width:${Math.min(100, cur.all.time / prev.all.time * 100)}%"></i></div>` : ''}
+      ${weekCalendar(acts, monday)}
+      ${isCurrent ? heroPlanCta(acts) : ''}
     </div>
 
     ${sportCards}
@@ -223,15 +223,40 @@ function heroPlanCta(acts) {
   return `<div class="hero-cta" data-plan>✨ Programme de la semaine${st ? ` · ${st.done}/${st.sessions.length} faites` : ''} <span>›</span></div>`;
 }
 
-function heroGoal(cur, prev, isCurrent) {
-  if (!prev) return isCurrent ? 'Aucun entraînement la semaine dernière' : 'Aucun entraînement la semaine précédente';
+// Écart compact avec la semaine précédente (à droite du total)
+function heroDelta(cur, prev, isCurrent) {
+  if (!prev) return '';
   const diff = prev - cur;
   if (diff > 0) {
     return isCurrent
-      ? `Reste <b>${fmtDuration(diff)}</b> pour égaler la semaine dernière`
-      : `${fmtDuration(diff)} de moins que la semaine précédente`;
+      ? `<div class="hero-delta"><span>reste</span><b>${fmtDuration(diff)}</b></div>`
+      : `<div class="hero-delta"><span>écart</span><b>−${fmtDuration(diff)}</b></div>`;
   }
-  return `🎉 Semaine ${isCurrent ? 'dernière' : 'précédente'} dépassée${diff < 0 ? ` de <b>${fmtDuration(-diff)}</b>` : ''}`;
+  return `<div class="hero-delta"><span>🎉 dépassée</span><b>+${fmtDuration(-diff)}</b></div>`;
+}
+
+// Calendrier de la semaine : séances faites (cochées) et séances prévues au programme
+function weekCalendar(acts, monday) {
+  const key = isoDay(monday);
+  const w = state.weekOffset;
+  const t = w === 0 ? todayIndex() : -1;
+  const plan = Coach.getPlan(key);
+  const planned = plan ? planStatus(plan, acts, w).sessions.filter(x => !x.act) : [];
+  const done = acts.filter(a => a.week === key).sort((a, b) => a.local.localeCompare(b.local));
+  const letters = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+  const days = letters.map((l, i) => {
+    const items = done.filter(a => dayOfAct(a) === i).map(a => `
+        <span class="cal-item done" data-cal-act="${esc(a.id)}" title="${esc(a.name)}">${SPORTS[a.sport].icon}<i>✓</i></span>`).join('')
+      + planned.filter(x => x.day === i).map(x => `
+        <span class="cal-item ${x.status === 'missed' ? 'missed' : 'planned'}" data-cal-sport="${x.sport}" data-cal-day="${i}" title="${esc(x.title)}">${SPORTS[x.sport].icon}</span>`).join('');
+    return `<div class="cal-day ${i === t ? 'today' : ''}">
+      <span class="cal-l">${l}</span>
+      <span class="cal-n">${addDays(monday, i).getUTCDate()}</span>
+      <div class="cal-items">${items || '<span class="cal-empty">·</span>'}</div>
+    </div>`;
+  }).join('');
+  return `<div class="week-cal">${days}</div>
+    <div class="cal-legend"><span><i class="lg done"></i>fait</span>${plan ? '<span><i class="lg planned"></i>prévu</span>' : ''}</div>`;
 }
 
 // Temps restant pour égaler la semaine précédente, converti en distance avec l'allure moyenne
@@ -692,7 +717,7 @@ function planStatus(plan, acts, w = 0) {
       if (cand) { cand.act = w.a; w.used = true; }
     }
   }
-  const t = w === 0 ? todayIndex() : -1;
+  const t = w === 0 ? todayIndex() : w < 0 ? 7 : -1;
   sessions.forEach(x => {
     x.status = x.act ? 'done' : x.day < t ? 'missed' : x.day === t ? 'today' : 'todo';
   });
@@ -1510,6 +1535,21 @@ document.getElementById('sync-btn').addEventListener('click', () => sync());
 $view.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) {
+    const doneItem = e.target.closest('[data-cal-act]');
+    if (doneItem) {
+      state.view = 'list';
+      state.listScroll = 0;
+      state.detailId = doneItem.dataset.calAct;
+      render();
+      return window.scrollTo(0, 0);
+    }
+    const planItem = e.target.closest('[data-cal-sport]');
+    if (planItem) {
+      const offset = Number(planItem.dataset.calDay) + 7 * state.weekOffset - todayIndex();
+      return offset >= 0 && offset <= 13 - todayIndex()
+        ? openNext(planItem.dataset.calSport, offset)
+        : openSheet({ type: 'plan', week: 0 });
+    }
     const card = e.target.closest('.sport-card[data-next]');
     if (card) return openNext(card.dataset.next);
     if (e.target.closest('[data-plan]')) return openSheet({ type: 'plan', week: 0 });
