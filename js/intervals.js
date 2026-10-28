@@ -46,15 +46,23 @@ function stepLine(st, sport) {
   const parts = ['-'];
   // texte affiché sur la montre
   // (sans chiffres ni tirets, qu'Intervals.icu prendrait pour une durée ou une nouvelle étape)
-  if (st.note) parts.push(st.note.replace(/[0-9\n\r-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40));
+  // (ni chiffres, tirets ou mots qu'Intervals.icu prendrait pour une durée, une unité ou une cible)
+  if (st.note) {
+    parts.push(st.note
+      .replace(/[0-9\n\r\-%=/:]+/g, ' ')
+      .replace(/\b(km|mtr|m|s|h|min|mi|x|z|pace|hr|lthr|rpm|w|ftp|ramp|freeride|intensity)\b/gi, ' ')
+      .replace(/\s+/g, ' ').trim().slice(0, 40));
+  }
   parts.push(st.duration_type === 'distance' && st.distance_m > 0 ? fmtDist(st.distance_m) : fmtTime(st.duration_s));
   if (st.kind === 'repos') {
     parts.push('intensity=rest');
   } else if (st.target_type === 'pace' && sport !== 'swim' && st.pace_min_s > 0) {
     const lo = Math.min(st.pace_min_s, st.pace_max_s || st.pace_min_s);
     const hi = Math.max(st.pace_min_s, st.pace_max_s || st.pace_min_s);
-    parts.push(lo === hi ? `${fmtPace(lo)}/km Pace` : `${fmtPace(lo)}-${fmtPace(hi)}/km Pace`);
-  } else if (st.target_type === 'hr_zone' && st.hr_zone >= 1) {
+    // plage : l'unité est répétée des deux côtés (5:20/km-5:35/km Pace)
+    parts.push(lo === hi ? `${fmtPace(lo)}/km Pace` : `${fmtPace(lo)}/km-${fmtPace(hi)}/km Pace`);
+  } else if (st.target_type === 'hr_zone' && st.hr_zone >= 1 && sport !== 'run') {
+    // course : pas de zone FC, une séance ne doit mélanger allure et FC (Garmin)
     parts.push(`Z${Math.min(5, st.hr_zone)} HR`);
   }
   return parts.filter(Boolean).join(' ');
@@ -98,7 +106,7 @@ export function stepLabel(st, sport) {
     const unit = '/km';
     const lo = Math.min(st.pace_min_s, st.pace_max_s || st.pace_min_s), hi = Math.max(st.pace_min_s, st.pace_max_s || st.pace_min_s);
     target = lo === hi ? `${fmtPace(lo)} ${unit}` : `${fmtPace(lo)}–${fmtPace(hi)} ${unit}`;
-  } else if (st.target_type === 'hr_zone' && st.hr_zone >= 1) target = `zone FC ${st.hr_zone}`;
+  } else if (st.target_type === 'hr_zone' && st.hr_zone >= 1 && sport !== 'run') target = `zone FC ${st.hr_zone}`;
   return [st.note, dur, target].filter(Boolean).join(' · ');
 }
 

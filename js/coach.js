@@ -570,7 +570,7 @@ const WORKOUT_PROPS = {
 };
 
 const WORKOUT_RULES = `Règles pour les étapes (elles seront envoyées sur une montre Garmin Forerunner 255) :
-- Course : cibles en allure (pace_min_s / pace_max_s en secondes par km, plage de 10 à 20 s) calculées à partir de mes allures réelles ; zones de FC possibles pour l'endurance facile.
+- Course : uniquement des cibles d'allure (pace_min_s / pace_max_s en secondes par km, plage de 10 à 20 s) calculées à partir de mes allures réelles, y compris pour l'échauffement, l'endurance facile et le retour au calme (plage d'allure lente). Jamais de zone de FC en course : la montre n'accepte pas une séance qui mélange allure et FC. Récupérations entre fractions : allure lente ou aucune cible.
 - Vélo : cibles en zone de FC (pas de capteur de puissance), ou aucune cible.
 - Natation (piscine) : étapes en distance (mètres, multiples de 25), séries avec des étapes « repos » en temps entre elles, pas de cible d'allure (la montre les gère mal) ; mets la consigne dans « note ».
 - Une répétition = un bloc avec repeat > 1 (pas de répétitions imbriquées).
