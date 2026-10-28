@@ -16,6 +16,29 @@ export function setPauses(on) {
 
 export const ICU_TYPE = { run: 'Run', ride: 'Ride', swim: 'Swim' };
 
+// Allure seuil en course (secondes par km) : Garmin ne reçoit les cibles d'allure que
+// sous forme de pourcentage de cette allure, telle qu'enregistrée dans Intervals.icu
+const THRESHOLD_KEY = 'trisuivi.runThreshold';
+
+export function getThreshold() {
+  try { return Number(localStorage.getItem(THRESHOLD_KEY)) || null; } catch { return null; }
+}
+
+export function setThreshold(sec) {
+  if (sec > 0) localStorage.setItem(THRESHOLD_KEY, String(Math.round(sec)));
+  else localStorage.removeItem(THRESHOLD_KEY);
+}
+
+// « 4:45 » → 285 s
+export function parsePace(text) {
+  const m = String(text).trim().match(/^(\d{1,2})[:'h.,](\d{2})$/);
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
+export function fmtPaceText(sec) {
+  return sec ? `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}` : '';
+}
+
 export function getKey() {
   try { return localStorage.getItem(KEY) || ''; } catch { return ''; }
 }
@@ -59,8 +82,14 @@ function stepLine(st, sport) {
   } else if (st.target_type === 'pace' && sport !== 'swim' && st.pace_min_s > 0) {
     const lo = Math.min(st.pace_min_s, st.pace_max_s || st.pace_min_s);
     const hi = Math.max(st.pace_min_s, st.pace_max_s || st.pace_min_s);
-    // plage : l'unité est répétée des deux côtés (5:20/km-5:35/km Pace)
-    parts.push(lo === hi ? `${fmtPace(lo)}/km Pace` : `${fmtPace(lo)}/km-${fmtPace(hi)}/km Pace`);
+    const t = getThreshold();
+    if (t) {
+      // % de l'allure seuil (en vitesse) : une allure plus lente donne un pourcentage plus bas
+      const a = Math.round(t / hi * 100), b = Math.round(t / lo * 100);
+      parts.push(a === b ? `${a}% Pace` : `${a}-${b}% Pace`);
+    } else {
+      parts.push(lo === hi ? `${fmtPace(lo)}/km Pace` : `${fmtPace(lo)}/km-${fmtPace(hi)}/km Pace`);
+    }
   } else if (st.target_type === 'hr_zone' && st.hr_zone >= 1 && sport !== 'run') {
     // course : pas de zone FC, une séance ne doit mélanger allure et FC (Garmin)
     parts.push(`Z${Math.min(5, st.hr_zone)} HR`);
@@ -136,9 +165,30 @@ async function call(path, options = {}) {
 }
 
 // Vérifie la clé : renvoie le nom de l'athlète
+// Allure seuil course lue dans les réglages Intervals.icu (vitesse en m/s)
+function runThresholdFrom(athlete) {
+  const settings = athlete.sportSettings || athlete.sport_settings || [];
+  const run = settings.find(x => (x.types || []).includes('Run'));
+  const v = run && Number(run.threshold_pace);
+  return v > 0 ? 1000 / v : null;
+}
+
+// Vérifie la clé et récupère l'allure seuil course si elle est réglée dans Intervals.icu
 export async function testConnection() {
   const a = await call('/athlete/0');
-  return [a.firstname, a.lastname].filter(Boolean).join(' ') || a.name || a.id || 'compte trouvé';
+  const t = runThresholdFrom(a);
+  if (t) setThreshold(t);
+  return {
+    name: [a.firstname, a.lastname].filter(Boolean).join(' ') || a.name || a.id || 'compte trouvé',
+    threshold: t,
+  };
+}
+
+// Avant d'envoyer une séance de course : il faut l'allure seuil
+export async function ensureThreshold() {
+  if (getThreshold()) return getThreshold();
+  try { await testConnection(); } catch { /* l'erreur d'envoi suivra si besoin */ }
+  return getThreshold();
 }
 
 // Crée ou remplace (même external_id) des séances planifiées dans le calendrier

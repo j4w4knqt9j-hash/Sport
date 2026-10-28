@@ -1150,6 +1150,8 @@ function weekWatchBlock(st) {
   return btn + (state.sheet?.type === 'plan' ? sendErrorBlock() : '') + (state.fallback?.sheet === 'plan' ? fallbackBlock() : '');
 }
 
+const NO_THRESHOLD = 'Allure seuil course inconnue : Garmin a besoin d\'un pourcentage de cette allure pour afficher les cibles. Règle-la dans Intervals.icu (Settings → Run → Threshold pace), puis touche « Tester la connexion » dans les Réglages, ou saisis-la directement dans les Réglages.';
+
 async function sendSession(sport) {
   if (state.busy) return;
   const acts = activities();
@@ -1163,6 +1165,7 @@ async function sendSession(sport) {
   state.sendError = null;
   renderSheet();
   try {
+    if (sport === 'run' && !(await Icu.ensureThreshold())) throw new Error(NO_THRESHOLD);
     const w = await Coach.structureSession(sport, c.text, coachContext(acts));
     const text = Icu.workoutText(w, sport);
     try {
@@ -1196,6 +1199,7 @@ async function sendWeek() {
   state.sendError = null;
   renderSheet();
   try {
+    if (items.some(x => x.sport === 'run') && !(await Icu.ensureThreshold())) throw new Error(NO_THRESHOLD);
     const details = await Coach.structureWeek(items, planSituation(acts, false, w, planCount(acts, w)), coachContext(acts));
     const prepared = details
       .map(d => ({ d, item: items[d.numero - 1] }))
@@ -1560,6 +1564,7 @@ function renderSettings() {
     <div class="card">
       <h2>Montre Garmin (Intervals.icu)</h2>
       <label class="field"><span>Clé API Intervals.icu</span><input id="icu-key" type="password" autocomplete="off" value="${esc(Icu.getKey())}"></label>
+      <label class="field"><span>Allure seuil course (min/km), la même que dans Intervals.icu</span><input id="icu-threshold" inputmode="decimal" autocomplete="off" placeholder="ex. 4:50" value="${esc(Icu.fmtPaceText(Icu.getThreshold()))}"></label>
       <button class="btn primary" data-action="save-icu">Enregistrer</button>
       <button class="btn ghost" data-action="test-icu">Tester la connexion</button>
       <div class="switch-row" style="margin-top:14px">
@@ -1773,11 +1778,20 @@ $view.addEventListener('click', e => {
     const out = document.getElementById('icu-test');
     out.textContent = 'Test en cours…';
     Icu.testConnection()
-      .then(name => { out.innerHTML = `<span style="color:${cssVar('--good')}">✓ Connecté à Intervals.icu : ${esc(String(name))}</span>`; })
+      .then(r => {
+        out.innerHTML = `<span style="color:${cssVar('--good')}">✓ Connecté à Intervals.icu : ${esc(String(r.name))}</span><br>${r.threshold
+          ? `Allure seuil course récupérée : <b>${Icu.fmtPaceText(r.threshold)} /km</b>`
+          : '<span style="color:' + cssVar('--warn') + '">Allure seuil course non trouvée : règle-la dans Intervals.icu (Settings → Run) ou saisis-la ci-dessus.</span>'}`;
+        const f = document.getElementById('icu-threshold');
+        if (f && r.threshold) f.value = Icu.fmtPaceText(r.threshold);
+      })
       .catch(e => { out.innerHTML = `<span style="color:${cssVar('--bad')}">✗ ${esc(e.message)}</span>`; });
   }
   else if (d.action === 'save-icu') {
     Icu.setKey(document.getElementById('icu-key').value);
+    const th = document.getElementById('icu-threshold').value;
+    if (th.trim() && !Icu.parsePace(th)) return toast('Allure seuil au format min:s, ex. 4:50');
+    Icu.setThreshold(Icu.parsePace(th));
     toast('Clé Intervals.icu enregistrée');
   }
   else if (d.action === 'add-note') {
