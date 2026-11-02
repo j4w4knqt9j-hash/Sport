@@ -65,7 +65,7 @@ function fmtPace(sec) {
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 }
 
-function stepLine(st, sport) {
+function stepLine(st, sport, pool = 25) {
   const parts = ['-'];
   // texte affiché sur la montre
   // (sans chiffres ni tirets, qu'Intervals.icu prendrait pour une durée ou une nouvelle étape)
@@ -76,7 +76,8 @@ function stepLine(st, sport) {
       .replace(/\b(km|mtr|m|s|h|min|mi|x|z|pace|hr|lthr|rpm|w|ftp|ramp|freeride|intensity)\b/gi, ' ')
       .replace(/\s+/g, ' ').trim().slice(0, 40));
   }
-  parts.push(st.duration_type === 'distance' && st.distance_m > 0 ? fmtDist(st.distance_m) : fmtTime(st.duration_s));
+  const dist = sport === 'swim' && st.distance_m > 0 ? Math.max(pool, Math.round(st.distance_m / pool) * pool) : st.distance_m;
+  parts.push(st.duration_type === 'distance' && dist > 0 ? fmtDist(dist) : fmtTime(st.duration_s));
   if (st.kind === 'repos') {
     parts.push('intensity=rest');
   } else if (st.target_type === 'pace' && sport !== 'swim' && st.pace_min_s > 0) {
@@ -109,7 +110,7 @@ export function exercisePause(w, i, j) {
 const OPEN_STEP = '- Press lap 1m intensity=rest';
 
 // Convertit la séance structurée par Claude en texte de séance Intervals.icu
-export function workoutText(w, sport, pauses = getPauses()) {
+export function workoutText(w, sport, pauses = getPauses(), pool = 25) {
   const out = [];
   w.blocks.forEach((b, i) => {
     if (pauses && i > 0) out.push('Pause', OPEN_STEP, '');
@@ -117,7 +118,7 @@ export function workoutText(w, sport, pauses = getPauses()) {
     out.push(b.repeat > 1 ? `${label} ${b.repeat}x` : label);
     b.steps.forEach((st, j) => {
       if (pauses && exercisePause(w, i, j)) out.push(OPEN_STEP);
-      out.push(stepLine(st, sport));
+      out.push(stepLine(st, sport, pool));
     });
     out.push('');
   });

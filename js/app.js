@@ -828,6 +828,7 @@ function nextSituation(acts, sport, opts) {
     `Aujourd'hui : ${Coach.DAYS[t]}, jour ${t + 1}/7 de la semaine en cours.`,
     `Jour prévu pour la séance : ${Coach.DAYS[targetDay]} ${fmtDayMonth(target)} (${opts.offset === 0 ? 'aujourd\'hui' : opts.offset === 1 ? 'demain' : `dans ${opts.offset} jours`}${t + opts.offset > 6 ? ', semaine prochaine' : ''}).`,
     `Temps disponible : ${opts.time == null ? 'non précisé (propose une durée adaptée)' : `${fmtDuration(opts.time * 60)} maximum`}.`,
+    ...(sport === 'swim' ? [`Piscine : bassin de ${Coach.getPool()} m.`] : []),
     `Cette semaine en ${label.toLowerCase()} : ${cur[sport].count} séance(s), ${fmtDistance(cur[sport].distance, sport)}, ${fmtDuration(cur[sport].time)} (semaine dernière : ${prev[sport].count} séance(s), ${fmtDuration(prev[sport].time)}).`,
     `Cette semaine tous sports : ${fmtDuration(cur.all.time)} (semaine dernière : ${fmtDuration(prev.all.time)}).`,
   ];
@@ -876,7 +877,7 @@ function nextOpts(sport, acts) {
 function nextKey(sport, acts) {
   const o = nextOpts(sport, acts);
   const plans = [0, 1].map(w => Coach.getPlan(isoDay(currentMonday(w)))?.at || '');
-  return `${nextStamp(acts)}|${o.offset}|${o.time}|${plans.join('|')}`;
+  return `${nextStamp(acts)}|${o.offset}|${o.time}|${plans.join('|')}${sport === 'swim' ? `|${Coach.getPool()}` : ''}`;
 }
 
 function openSheet(sheet) {
@@ -1089,6 +1090,9 @@ function nextSheet(sport) {
     <div class="chips">${dayChips}</div>
     <div class="opt-label">Temps disponible</div>
     <div class="chips">${timeChips}</div>
+    ${sport === 'swim' ? `
+    <div class="opt-label">Bassin</div>
+    <div class="chips">${Coach.POOLS.map(m => `<button data-sheet="pool" data-pool="${m}" class="${Coach.getPool() === m ? 'active' : ''}">${m} m</button>`).join('')}</div>` : ''}
     ${hint}
     ${body}`);
 }
@@ -1167,7 +1171,7 @@ async function sendSession(sport) {
   try {
     if (sport === 'run' && !(await Icu.ensureThreshold())) throw new Error(NO_THRESHOLD);
     const w = await Coach.structureSession(sport, c.text, coachContext(acts));
-    const text = Icu.workoutText(w, sport);
+    const text = Icu.workoutText(w, sport, Icu.getPauses(), Coach.getPool());
     try {
       await Icu.pushEvents([Icu.makeEvent({ date, sport, name: w.name, text, minutes: w.minutes, externalId: id })]);
       Icu.markSent(id, { workout: w, direct: true, pauses: Icu.getPauses() });
@@ -1206,7 +1210,7 @@ async function sendWeek() {
       .filter(x => x.item)
       .map(({ d, item }) => {
         const date = isoDay(addDays(monday, item.day));
-        return { d, item, date, id: Icu.externalId(date, item.sport), text: Icu.workoutText(d, item.sport) };
+        return { d, item, date, id: Icu.externalId(date, item.sport), text: Icu.workoutText(d, item.sport, Icu.getPauses(), Coach.getPool()) };
       });
     try {
       await Icu.pushEvents(prepared.map(x => Icu.makeEvent({ date: x.date, sport: x.item.sport, name: x.d.name, text: x.text, minutes: x.d.minutes, externalId: x.id })));
@@ -1338,6 +1342,10 @@ document.addEventListener('click', e => {
     const acts = activities();
     const w = sh.week || 0;
     state.planCount[isoDay(currentMonday(w))] = Math.min(14, Math.max(1, planCount(acts, w) + Number(b.dataset.delta)));
+    renderSheet();
+  }
+  else if (action === 'pool') {
+    Coach.setPool(Number(b.dataset.pool));
     renderSheet();
   }
   else if (action === 'day' || action === 'time') {
@@ -1567,6 +1575,10 @@ function renderSettings() {
       <label class="field"><span>Allure seuil course (min/km), la même que dans Intervals.icu</span><input id="icu-threshold" inputmode="decimal" autocomplete="off" placeholder="ex. 4:50" value="${esc(Icu.fmtPaceText(Icu.getThreshold()))}"></label>
       <button class="btn primary" data-action="save-icu">Enregistrer</button>
       <button class="btn ghost" data-action="test-icu">Tester la connexion</button>
+      <label class="field" style="margin-top:14px"><span>Bassin de natation</span>
+        <select id="pool-length">${Coach.POOLS.map(m => `<option value="${m}" ${Coach.getPool() === m ? 'selected' : ''}>${m} m</option>`).join('')}</select>
+      </label>
+      <p class="muted">Les séances de natation sont construites en multiples de cette longueur. Sur la montre, vérifie la taille du bassin au lancement de « Natation en piscine ».</p>
       <div class="switch-row" style="margin-top:14px">
         <div><strong>Pauses libres</strong><small>Pause non chronométrée entre l'échauffement, chaque exercice du corps de séance et le retour au calme : la montre attend un appui sur Lap.</small></div>
         <label class="switch"><input type="checkbox" id="lap-pauses" ${Icu.getPauses() ? 'checked' : ''}><i></i></label>
@@ -1842,6 +1854,11 @@ $view.addEventListener('input', e => {
 });
 
 $view.addEventListener('change', e => {
+  if (e.target.id === 'pool-length') {
+    Coach.setPool(Number(e.target.value));
+    toast(`Bassin de ${e.target.value} m`);
+    return;
+  }
   if (e.target.id === 'lap-pauses') {
     Icu.setPauses(e.target.checked);
     toast(e.target.checked ? 'Pauses libres activées' : 'Pauses libres désactivées');
