@@ -87,6 +87,17 @@ export async function fetchLaps(id) {
   return laps.map(l => [l.distance || 0, l.moving_time || 0]);
 }
 
+// Tours (laps) complets d'une activité, tels qu'enregistrés par la montre
+export async function fetchLapsFull(id) {
+  const token = await accessToken();
+  const res = await fetch(`${API}/activities/${id}/laps`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 429) throw new Error('Limite de requêtes Strava atteinte, réessaie dans 15 min');
+  if (!res.ok) throw new Error(`Erreur Strava (${res.status})`);
+  return res.json();
+}
+
 // Flux détaillés d'une activité (temps, distance, FC, altitude, en mouvement)
 export async function fetchStreams(id) {
   const token = await accessToken();

@@ -1,5 +1,5 @@
 import * as Strava from './strava.js';
-import { demoActivities, demoSplits } from './demo.js';
+import { demoActivities, demoSplits, demoWatchLaps } from './demo.js';
 import * as Detail from './detail.js';
 import * as Icu from './intervals.js';
 import * as Coach from './coach.js';
@@ -485,28 +485,35 @@ function renderDetail(acts) {
 
   // tronçons : séries (natation), calculés en démo, ou flux Strava mis en cache
   let detail = Detail.cachedDetail(a.id);
-  if (sport !== 'swim' && !detail) {
-    if (demo) detail = { splits: demoSplits(a, Detail.SPLIT[sport]) };
+  if (sport !== 'swim' && (!detail || detail.laps === undefined)) {
+    if (demo) detail = { splits: demoSplits(a, Detail.SPLIT[sport]), laps: demoWatchLaps(a) };
     else if (Strava.isConnected()) loadStreams(a);
   }
-  const splits = Detail.splitsOf(a, detail);
-  const insights = Detail.analyse(a, acts, splits, { swimLimit: paceInfo.limit });
+  const kmSplits = Detail.splitsOf(a, detail);
+  const laps = sport === 'swim' ? [] : Detail.lapsOf(detail);
+  const lapKinds = Detail.classifyLaps(laps);
+  // par défaut, les tours de la montre quand il y en a
+  const showLaps = laps.length > 0 && state.splitView !== 'km';
+  const splits = showLaps ? laps : kmSplits;
+  const insights = Detail.analyse(a, acts, kmSplits.length ? kmSplits : laps, { swimLimit: paceInfo.limit, laps });
   const isFlagged = x => sport === 'swim' && paceInfo.limit && x.time / x.distance * 100 < paceInfo.limit;
-  const hrSplits = splits.filter(x => x.hr);
+  const hrSplits = [...kmSplits, ...laps].filter(x => x.hr);
   const hrAvg = a.hr || (hrSplits.length ? hrSplits.reduce((t, x) => t + x.hr * x.time, 0) / hrSplits.reduce((t, x) => t + x.time, 0) : null);
   const color = SPORTS[sport].color;
   const tones = { good: cssVar('--good'), bad: cssVar('--bad'), info: cssVar('--ride') };
   const icons = { good: '▲', bad: '▼', info: '●' };
 
   const stat = (label, value) => value ? `<div class="tile"><span>${label}</span><strong>${value}</strong></div>` : '';
-  const hrMax = a.maxHr || (splits.some(x => x.hr) ? Math.max(...splits.map(x => x.hr || 0)) : null);
+  const hrMax = a.maxHr || (hrSplits.length ? Math.max(...hrSplits.map(x => x.maxHr || x.hr || 0)) : null);
 
   const splitRows = splits.map((x, i) => {
     const v = paceValue(x.distance / x.time, sport);
     const flagged = isFlagged(x);
     const label = sport === 'swim' ? `${i + 1}. ${fmtDistance(x.distance, sport)}`
+      : showLaps ? `${i + 1}. ${fmtDistance(x.distance, sport)}`
       : x.distance < Detail.SPLIT[sport] * 0.95 ? `${fmtDistance(x.distance, sport)}` : `${sport === 'run' ? i + 1 : (i + 1) * 5} km`;
-    return `<tr class="${flagged ? 'flag' : ''}">
+    const kind = showLaps && lapKinds ? lapKinds[i] : '';
+    return `<tr class="${flagged ? 'flag' : ''} ${kind}">
       <td>${label}</td>
       <td>${fmtShortPace(v, sport)}${flagged ? ' ⚠' : ''}</td>
       <td>${fmtClock(x.time)}</td>
@@ -515,16 +522,22 @@ function renderDetail(acts) {
   }).join('');
 
   const splitUnit = sport === 'run' ? 'min/km' : sport === 'ride' ? 'km/h' : 'min/100 m';
-  const splitTitle = sport === 'swim' ? 'Séries' : sport === 'run' ? 'Kilomètre par kilomètre' : 'Par tronçon de 5 km';
+  const splitTitle = sport === 'swim' ? 'Séries' : showLaps ? 'Tours de la montre' : sport === 'run' ? 'Kilomètre par kilomètre' : 'Par tronçon de 5 km';
+  const viewTabs = laps.length && kmSplits.length ? `
+      <div class="segmented full">
+        <button data-split-view="laps" class="${showLaps ? 'active' : ''}">Tours (${laps.length})</button>
+        <button data-split-view="km" class="${showLaps ? '' : 'active'}">${sport === 'run' ? 'Par km' : 'Par 5 km'}</button>
+      </div>` : '';
   let splitBody;
   if (splits.length) {
-    splitBody = `
+    splitBody = `${viewTabs}
       <div class="chart-box small"><canvas id="split-chart"></canvas></div>
       <table class="splits">
-        <thead><tr><th>${sport === 'swim' ? 'Série' : 'Tronçon'}</th><th>${sport === 'ride' ? 'km/h' : 'Allure'}</th><th>Temps</th>${sport !== 'swim' ? '<th>FC</th><th>D+</th>' : ''}</tr></thead>
+        <thead><tr><th>${sport === 'swim' ? 'Série' : showLaps ? 'Tour' : 'Tronçon'}</th><th>${sport === 'ride' ? 'km/h' : 'Allure'}</th><th>Temps</th>${sport !== 'swim' ? '<th>FC</th><th>D+</th>' : ''}</tr></thead>
         <tbody>${splitRows}</tbody>
       </table>
-      ${splits.some(isFlagged) ? '<p class="muted">⚠ Série écartée des allures (bug montre probable).</p>' : ''}`;
+      ${splits.some(isFlagged) ? '<p class="muted">⚠ Série écartée des allures (bug montre probable).</p>' : ''}
+      ${showLaps && lapKinds ? '<p class="muted">En gras : tours rapides (efforts).</p>' : ''}`;
   } else if (state.detailLoading === a.id) {
     splitBody = '<p class="muted">Chargement du détail depuis Strava…</p>';
   } else if (sport === 'swim') {
@@ -581,7 +594,7 @@ function renderDetail(acts) {
     const hasHr = splits.some(x => x.hr);
     charts.push(new Chart(document.getElementById('split-chart'), {
       data: {
-        labels: splits.map((_, i) => String(sport === 'ride' ? (i + 1) * 5 : i + 1)),
+        labels: splits.map((_, i) => String(showLaps || sport !== 'ride' ? i + 1 : (i + 1) * 5)),
         datasets: [
           { type: 'bar', data: vals, backgroundColor: splits.map(x => isFlagged(x) ? cssVar('--warn') : color), borderRadius: 4, yAxisID: 'y' },
           ...(hasHr ? [{ type: 'line', data: splits.map(x => x.hr), borderColor: cssVar('--bad'), borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'hr' }] : []),
@@ -620,8 +633,10 @@ function aiCard(a) {
   } else {
     const done = Coach.cachedAnalysis(a.id);
     const waiting = state.detailLoading === a.id;
+    const lapsAt = Detail.cachedDetail(a.id)?.lapsAt;
+    const stale = done && lapsAt && done.at < lapsAt && Detail.lapsOf(Detail.cachedDetail(a.id)).length;
     body = done
-      ? `<div class="ai-text">${Coach.renderMarkdown(done.text)}</div>
+      ? `${stale ? '<p class="stale-note">Cette analyse a été faite sans les tours de ta montre : touche « Régénérer » pour une analyse plus précise.</p>' : ''}<div class="ai-text">${Coach.renderMarkdown(done.text)}</div>
          <div class="ai-foot">
            <span class="muted">${esc(Coach.modelLabel(done.model))} · ${new Date(done.at).toLocaleDateString('fr-FR')}</span>
            <button class="link" data-action="ai-analyse">Régénérer</button>
@@ -638,14 +653,16 @@ async function runAiAnalysis() {
   const a = acts.find(x => x.id === state.detailId);
   if (!a || state.aiBusy) return;
   const sport = a.sport;
-  const detail = Detail.cachedDetail(a.id) || (loadPrefs().demo && sport !== 'swim' ? { splits: demoSplits(a, Detail.SPLIT[sport]) } : null);
+  const detail = Detail.cachedDetail(a.id) || (loadPrefs().demo && sport !== 'swim' ? { splits: demoSplits(a, Detail.SPLIT[sport]), laps: demoWatchLaps(a) } : null);
+  const laps = sport === 'swim' ? [] : Detail.lapsOf(detail);
+  const kinds = Detail.classifyLaps(laps);
   const splits = Detail.splitsOf(a, detail).map(x => ({
     ...x,
     flagged: sport === 'swim' && paceInfo.limit && x.time / x.distance * 100 < paceInfo.limit,
   }));
-  const insights = Detail.analyse(a, acts, splits, { swimLimit: paceInfo.limit });
+  const insights = Detail.analyse(a, acts, splits.length ? splits : laps, { swimLimit: paceInfo.limit, laps });
   const unit = sport === 'swim' ? 'séries de la montre' : sport === 'run' ? 'par kilomètre' : 'par 5 km';
-  const description = Coach.describeActivity(a, splits, insights, unit);
+  const description = Coach.describeActivity(a, splits, insights, unit, laps.map((l, i) => ({ ...l, kind: kinds?.[i] })));
 
   state.aiBusy = a.id;
   state.aiPartial = '';
@@ -669,8 +686,16 @@ async function loadStreams(a) {
   if (state.detailLoading) return;
   state.detailLoading = a.id;
   try {
-    const streams = await Strava.fetchStreams(a.id);
-    Detail.saveDetail(a.id, { splits: Detail.splitsFromStreams(streams, Detail.SPLIT[a.sport]) });
+    const detail = { ...(Detail.cachedDetail(a.id) || {}) };
+    if (!detail.splits) {
+      const streams = await Strava.fetchStreams(a.id);
+      detail.splits = Detail.splitsFromStreams(streams, Detail.SPLIT[a.sport]);
+    }
+    if (detail.laps === undefined) {
+      detail.laps = Detail.lapsFrom(await Strava.fetchLapsFull(a.id), a.sport);
+      detail.lapsAt = Date.now();
+    }
+    Detail.saveDetail(a.id, detail);
   } catch (e) {
     toast(e.message);
   } finally {
@@ -1663,10 +1688,21 @@ async function sync(full = false) {
       try { a.laps = await Strava.fetchLaps(a.id); }
       catch { break; } // on réessaiera à la prochaine synchro
     }
+    // tours de la montre des sorties course et vélo (pour l'affichage et le coach)
+    let lapsAdded = 0;
+    for (const a of [...byId.values()].sort((x, y) => y.local.localeCompare(x.local))) {
+      if (a.sport === 'swim' || a.local < START_DATE || Detail.cachedDetail(a.id)?.laps !== undefined) continue;
+      try {
+        const laps = Detail.lapsFrom(await Strava.fetchLapsFull(a.id), a.sport);
+        Detail.saveDetail(a.id, { ...(Detail.cachedDetail(a.id) || {}), laps, lapsAt: Date.now() });
+        lapsAdded++;
+      } catch { break; } // limite Strava : la suite à la prochaine synchro
+    }
     const kept = [...byId.values()].filter(a => a.local >= START_DATE);
     localStorage.setItem(STORE, JSON.stringify(kept));
     savePrefs({ lastSync: Date.now() });
-    toast(added ? `${added} nouvelle${added > 1 ? 's' : ''} activité${added > 1 ? 's' : ''}` : 'Déjà à jour');
+    toast((added ? `${added} nouvelle${added > 1 ? 's' : ''} activité${added > 1 ? 's' : ''}` : 'Déjà à jour')
+      + (lapsAdded ? ` · tours récupérés pour ${lapsAdded} sortie${lapsAdded > 1 ? 's' : ''}` : ''));
     render();
   } catch (e) {
     toast(e.message);
@@ -1771,6 +1807,7 @@ $view.addEventListener('click', e => {
     render();
     sendCoach(`J'aimerais parler de ma sortie ${SPORTS[a.sport].label.toLowerCase()} « ${a.name} » du ${fmtActivityDate(a.local).split(' · ')[0]}. Voici ton analyse :\n\n${Coach.cachedAnalysis(a.id)?.text || ''}\n\nQu'est-ce que tu me conseilles de travailler en priorité ?`);
   }
+  else if (d.splitView) { state.splitView = d.splitView; render(); }
   else if (d.action === 'back') {
     state.detailId = null;
     render();

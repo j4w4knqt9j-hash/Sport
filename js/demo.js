@@ -80,3 +80,19 @@ export function demoSplits(act, unit) {
     };
   });
 }
+
+// Tours fictifs : fractionné pour les footings, auto-lap au km (ou 5 km à vélo) sinon
+export function demoWatchLaps(act) {
+  const base = act.time / act.distance;
+  const lap = (d, k, hr) => ({ distance: d, time: Math.round(d * base * k), elapsed: Math.round(d * base * k), hr, maxHr: hr + 6, gain: 2, cadence: act.sport === 'run' ? 172 : 85 });
+  if (act.sport === 'run' && act.name === 'Footing') {
+    const laps = [lap(1500, 1.1, 138)];
+    for (let i = 0; i < 5; i++) laps.push(lap(600, 0.86 + i * 0.01, 165 + i), lap(300, 1.3, 145));
+    laps.push(lap(Math.max(500, act.distance - 1500 - 4500), 1.12, 140));
+    return laps;
+  }
+  const unit = act.sport === 'run' ? 1000 : 5000;
+  const out = [];
+  for (let d = 0; d < act.distance; d += unit) out.push(lap(Math.min(unit, act.distance - d), 1, 145 + out.length));
+  return out.filter(l => l.distance > 50);
+}

@@ -46,6 +46,35 @@ export function splitsFromStreams(s, unit) {
   }));
 }
 
+// Tours de la montre (Strava « laps ») : [{ distance, time, elapsed, hr, maxHr, gain, cadence }]
+export function lapsFrom(raw, sport) {
+  return (raw || []).map(l => ({
+    distance: Math.round(l.distance || 0),
+    time: l.moving_time || 0,
+    elapsed: l.elapsed_time || 0,
+    hr: l.average_heartrate ? Math.round(l.average_heartrate) : null,
+    maxHr: l.max_heartrate ? Math.round(l.max_heartrate) : null,
+    gain: Math.round(l.total_elevation_gain || 0),
+    // Strava compte la cadence de course sur une jambe
+    cadence: l.average_cadence ? Math.round(l.average_cadence * (sport === 'run' ? 2 : 1)) : null,
+  })).filter(l => l.distance > 0 && l.time > 0);
+}
+
+// Tours utiles : au moins deux (un seul tour = toute la sortie)
+export function lapsOf(detail) {
+  return detail?.laps?.length >= 2 ? detail.laps : [];
+}
+
+// Séance fractionnée ? Sépare les tours rapides (efforts) des tours lents (récupérations)
+export function classifyLaps(laps) {
+  if (laps.length < 3) return null;
+  const speeds = laps.map(l => l.distance / l.time);
+  const min = Math.min(...speeds), max = Math.max(...speeds);
+  if (max / min < 1.15) return null; // allure homogène : pas de fractionné
+  const cut = (min + max) / 2;
+  return laps.map((l, i) => (speeds[i] >= cut ? 'effort' : 'recup'));
+}
+
 // Tronçons d'une sortie : séries de la montre en natation, flux Strava sinon
 export function splitsOf(act, detail) {
   if (act.sport === 'swim') {
@@ -76,7 +105,7 @@ function paceGap(v, ref, sport) {
 }
 
 // Retourne une liste de constats { tone: 'good' | 'bad' | 'info', title, text }
-export function analyse(act, acts, splits, { swimLimit = 0 } = {}) {
+export function analyse(act, acts, splits, { swimLimit = 0, laps = [] } = {}) {
   const out = [];
   const sport = act.sport;
   const others = acts.filter(a => a.sport === sport && a.id !== act.id);
@@ -180,6 +209,31 @@ export function analyse(act, acts, splits, { swimLimit = 0 } = {}) {
         tone: drift < 0.05 ? 'good' : drift < 0.1 ? 'info' : 'bad',
         title: drift < 0.05 ? 'Peu de dérive cardiaque' : drift < 0.1 ? 'Dérive cardiaque modérée' : 'Forte dérive cardiaque',
         text: `À allure égale, ta FC a varié de ${pctText(drift)} entre les deux moitiés.${drift >= 0.05 ? ' Signe de fatigue, de chaleur ou de manque d\'hydratation.' : ' Bonne endurance sur cette durée.'}`,
+      });
+    }
+  }
+
+  // Tours de la montre : fractions
+  const kinds = classifyLaps(laps);
+  if (kinds) {
+    const eff = laps.filter((_, i) => kinds[i] === 'effort');
+    const rec = laps.filter((_, i) => kinds[i] === 'recup');
+    const sum = (arr, f) => arr.reduce((t, x) => t + x[f], 0);
+    const pace = arr => fmtPaceValue(paceValue(sum(arr, 'distance') / sum(arr, 'time'), sport), sport);
+    const hrs = eff.filter(l => l.hr);
+    out.push({
+      tone: 'info',
+      title: `Séance fractionnée : ${eff.length} effort${eff.length > 1 ? 's' : ''} détecté${eff.length > 1 ? 's' : ''} dans les tours`,
+      text: `Efforts à ${pace(eff)}${hrs.length ? ` (FC moy. ${Math.round(mean(hrs.map(l => l.hr)))})` : ''}, récupérations et échauffement à ${pace(rec)}.`,
+    });
+    if (eff.length >= 3) {
+      const sp = eff.map(l => l.distance / l.time);
+      const cv = Math.sqrt(mean(sp.map(x => (x - mean(sp)) ** 2))) / mean(sp);
+      const fade = sp.at(-1) / sp[0] - 1;
+      out.push({
+        tone: cv < 0.03 && fade > -0.03 ? 'good' : fade < -0.05 ? 'bad' : 'info',
+        title: cv < 0.03 ? 'Efforts très réguliers' : fade < -0.05 ? 'Baisse de vitesse sur les derniers efforts' : 'Efforts assez réguliers',
+        text: `Écart moyen de ${Math.round(cv * 100)} % entre les efforts ; dernier effort ${pctText(fade)} par rapport au premier.`,
       });
     }
   }

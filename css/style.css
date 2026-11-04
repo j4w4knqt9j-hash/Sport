@@ -516,3 +516,8 @@ body.no-scroll { overflow: hidden; }
 .mem-note .exp { color: var(--warn); font-weight: 600; }
 .mem-actions { display: flex; gap: 10px; flex: none; }
 .mem-flash i { font-style: normal; opacity: 0.8; }
+
+/* ---------- Tours de la montre ---------- */
+table.splits tr.effort td { font-weight: 700; }
+table.splits tr.recup td { color: var(--muted); }
+.stale-note { font-size: 13px; color: var(--warn); margin: 0 0 8px; }
