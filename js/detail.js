@@ -1,6 +1,6 @@
 // Détail d'une sortie : découpage en tronçons (km, 5 km ou séries) et analyse chiffrée, sans IA.
 
-import { paceValue, fmtPaceValue, fmtDuration, fmtDistance, SPORTS } from './stats.js';
+import { paceValue, fmtPaceValue, fmtDuration, fmtDistance, SPORTS, sportInfo } from './stats.js';
 
 const CACHE = 'trisuivi.detail.';
 // Longueur d'un tronçon selon le sport
@@ -108,8 +108,9 @@ function paceGap(v, ref, sport) {
 export function analyse(act, acts, splits, { swimLimit = 0, laps = [] } = {}) {
   const out = [];
   const sport = act.sport;
-  const others = acts.filter(a => a.sport === sport && a.id !== act.id);
-  const label = SPORTS[sport].label.toLowerCase();
+  // pour les autres activités, on compare avec le même type (HIIT avec HIIT…)
+  const others = acts.filter(a => a.sport === sport && a.id !== act.id && (sport !== 'other' || a.type === act.type));
+  const label = sportInfo(act).label.toLowerCase();
   const v = act.pace ? paceValue(act.pace.distance / act.pace.time, sport) : null;
 
   // Allure par rapport à la moyenne
@@ -128,7 +129,15 @@ export function analyse(act, acts, splits, { swimLimit = 0, laps = [] } = {}) {
   }
 
   // Distance et durée
-  if (others.length >= 2) {
+  if (sport === 'other' && others.length >= 2) {
+    const avgTime = mean(others.map(a => a.time));
+    const r = act.time / avgTime - 1;
+    out.push({
+      tone: 'info',
+      title: Math.abs(r) < 0.1 ? 'Durée habituelle' : `Durée ${pctText(r)} vs ta moyenne`,
+      text: `Durée moyenne en ${label} : ${fmtDuration(avgTime)} · ${others.length + 1} séances au total.`,
+    });
+  } else if (others.length >= 2 && act.distance > 0) {
     const longer = others.filter(a => a.distance > act.distance).length;
     const avgDist = mean(others.map(a => a.distance));
     const ratio = act.distance / avgDist - 1;

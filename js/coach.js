@@ -3,7 +3,7 @@
 
 import { cachedDetail, lapsOf, classifyLaps } from './detail.js';
 import {
-  SPORTS, SPORT_KEYS, isoDay, currentMonday, weeklySeries,
+  SPORTS, SPORT_KEYS, sportInfo, isoDay, currentMonday, weeklySeries,
   fmtDuration, fmtDistance, fmtPace, fmtPaceValue, fmtWeekRange, fmtActivityDate, fmtClock,
 } from './stats.js';
 
@@ -210,7 +210,7 @@ export function buildContext(acts, { startDate, goal, swimRef, swimLimit }) {
   lines.push(`Date du jour : ${today.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`);
   lines.push(`Objectif de l'athlète : ${goal || 'non précisé'}`);
   lines.push('', ...memoryLines(), '');
-  lines.push(`Données : activités Strava depuis le ${startDate} (natation, vélo et course uniquement). Semaines du lundi au dimanche.`);
+  lines.push(`Données : toutes les activités Strava depuis le ${startDate} (natation, vélo, course et autres activités : renforcement, HIIT, marche…). Semaines du lundi au dimanche. Les autres activités comptent dans la fatigue et la charge, même si les programmes ne portent que sur la natation, le vélo et la course.`);
   if (swimRef) {
     lines.push(`Natation : allure habituelle ${fmtPaceValue(swimRef, 'swim')} ; les séries plus rapides que ${fmtPaceValue(swimLimit, 'swim')} sont écartées des allures (bug de la montre qui ajoute des longueurs).`);
   }
@@ -223,6 +223,10 @@ export function buildContext(acts, { startDate, goal, swimRef, swimLimit }) {
     const parts = SPORT_KEYS.map(s => t[s].count
       ? `${SPORTS[s].label} ${t[s].count}× ${fmtDistance(t[s].distance, s)} en ${fmtDuration(t[s].time)}`
       : `${SPORTS[s].label} 0`);
+    if (t.other.count) {
+      const types = [...new Set(acts.filter(a => a.sport === 'other' && a.week === isoDay(w.monday)).map(a => sportInfo(a).label))];
+      parts.push(`Autres ${t.other.count}× en ${fmtDuration(t.other.time)} (${types.join(', ')})`);
+    }
     const current = isoDay(w.monday) === isoDay(monday) ? ' (en cours)' : '';
     const effort = t.all.effort ? `, effort relatif ${Math.round(t.all.effort)}` : '';
     lines.push(`- ${fmtWeekRange(w.monday)}${current} : total ${fmtDuration(t.all.time)}${effort} | ${parts.join(' | ')}`);
@@ -237,7 +241,9 @@ export function buildContext(acts, { startDate, goal, swimRef, swimLimit }) {
       a.effort != null ? `effort ${a.effort}` : '',
       a.paceNote ? `(${a.paceNote})` : '',
     ].filter(Boolean).join(' · ');
-    lines.push(`- ${fmtActivityDate(a.local)} · ${SPORTS[a.sport].label} · « ${a.name.replace(/\s+/g, ' ').slice(0, 80)} » · ${fmtDistance(a.distance, a.sport)} · ${fmtDuration(a.time)} · ${pace}${extra ? ' · ' + extra : ''}`);
+    lines.push(a.sport === 'other'
+      ? `- ${fmtActivityDate(a.local)} · ${sportInfo(a).label} · « ${a.name.replace(/\s+/g, ' ').slice(0, 80)} » · ${fmtDuration(a.time)}${a.distance > 0 ? ` · ${fmtDistance(a.distance, a.sport)}` : ''}${extra ? ' · ' + extra : ''}`
+      : `- ${fmtActivityDate(a.local)} · ${SPORTS[a.sport].label} · « ${a.name.replace(/\s+/g, ' ').slice(0, 80)} » · ${fmtDistance(a.distance, a.sport)} · ${fmtDuration(a.time)} · ${pace}${extra ? ' · ' + extra : ''}`);
     // tours de la montre des sorties des 3 dernières semaines
     const laps = a.sport !== 'swim' && Date.now() - new Date(a.local).getTime() < 21 * 864e5 ? lapsOf(cachedDetail(a.id)) : [];
     if (laps.length) {
@@ -378,11 +384,11 @@ export function cachedAnalysis(id) {
 export function describeActivity(act, splits, insights, splitLabel, laps = []) {
   const s = act.sport;
   const lines = [
-    `Sport : ${SPORTS[s].label}`,
+    `Sport : ${sportInfo(act).label}${s === 'other' ? ' (hors natation / vélo / course)' : ''}`,
     `Nom : « ${act.name.replace(/\s+/g, ' ').slice(0, 80)} »`,
     `Date : ${fmtActivityDate(act.local)}`,
     `Distance : ${fmtDistance(act.distance, s)} · temps en mouvement ${fmtDuration(act.time)} · temps total ${fmtDuration(act.elapsed || act.time)}`,
-    `Allure moyenne : ${act.pace ? fmtPace(act.pace.distance, act.pace.time, s) : 'écartée'}${act.paceNote ? ` (${act.paceNote})` : ''}`,
+    ...(s === 'other' ? [] : [`Allure moyenne : ${act.pace ? fmtPace(act.pace.distance, act.pace.time, s) : 'écartée'}${act.paceNote ? ` (${act.paceNote})` : ''}`]),
   ];
   if (s !== 'swim') lines.push(`Dénivelé : ${Math.round(act.elevation)} m`);
   if (act.hr) lines.push(`FC moyenne ${Math.round(act.hr)} bpm${act.maxHr ? `, max ${Math.round(act.maxHr)} bpm` : ''}`);
@@ -480,6 +486,7 @@ Règles :
 - Prévois exactement le nombre total de séances indiqué dans la situation (je l'ai choisi). Répartis-les entre les sports actifs indiqués dans la situation, selon mon objectif, mes points faibles et mes habitudes. Ne programme aucune séance d'un sport désactivé.
 - Les séances imposées de la situation sont obligatoires : garde-les exactement au jour et dans le sport indiqués (avec la durée indiquée si elle est précisée), et choisis leur contenu. Elles comptent dans le nombre total ; organise les autres séances autour d'elles.
 ${rules}
+- Tiens compte de mes autres activités (renforcement, HIIT, marche…) dans la fatigue et la charge de la semaine, mais ne les programme pas et ne les compte pas dans le nombre de séances.
 - Évite si possible le même sport deux jours de suite, garde au moins un jour sans séance (sauf si le nombre de séances l'impose : deux séances le même jour sont alors possibles), et une seule séance clé intense par sport.
 - Durées réalistes par rapport à mes volumes récents (pas plus de 10 à 15 % au-dessus de ma semaine habituelle, sauf si j'ai demandé plus de séances que d'habitude : augmente alors le nombre, pas la durée de chaque séance).
 ${adapting ? '- Je n\'ai pas suivi le programme précédent à la lettre (voir le suivi) : réorganise les jours restants en conséquence, sans essayer de rattraper toutes les séances manquées.' : ''}`;

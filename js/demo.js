@@ -59,6 +59,26 @@ export function demoActivities(weeks = 20) {
       });
     }
   }
+  // autres activités : renforcement le lundi, HIIT un jeudi sur deux, marche le dimanche
+  const rand2 = rng(7);
+  for (let w = 0; w < weeks; w++) {
+    for (const [type, day, hour, min, name, dist] of [
+      ['WeightTraining', 0, '19:00', 45, 'Renforcement', 0],
+      ...(w % 2 ? [['HighIntensityIntervalTraining', 3, '19:00', 35, 'HIIT', 0]] : []),
+      ['Walk', 6, '16:00', 50, 'Balade', 4200],
+    ]) {
+      const date = isoDay(addDays(start, 7 * w + day));
+      if (date > today || rand2() > 0.85) continue;
+      const moving_time = Math.round(min * 60 * (0.9 + rand2() * 0.2));
+      out.push({
+        id: 10000 + id++, name, sport_type: type,
+        start_date_local: `${date}T${hour}:00Z`, start_date: `${date}T${hour}:00Z`,
+        distance: dist, moving_time, elapsed_time: moving_time + 120, total_elevation_gain: 0,
+        average_speed: dist ? dist / moving_time : 0,
+        suffer_score: Math.round(min * (type === 'Walk' ? 0.3 : 1.4)),
+      });
+    }
+  }
   return out;
 }
 

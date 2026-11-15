@@ -4,8 +4,53 @@ export const SPORTS = {
   swim: { label: 'Natation', icon: '🏊', color: '#14b8a6' },
   ride: { label: 'Vélo', icon: '🚴', color: '#3b82f6' },
   run: { label: 'Course', icon: '🏃', color: '#fc4c02' },
+  other: { label: 'Autres activités', icon: '🏅', color: '#a855f7' },
 };
+// Sports programmés par le coach
 export const SPORT_KEYS = ['swim', 'ride', 'run'];
+// Tous les groupes affichés (les autres types Strava sont regroupés dans « other »)
+export const ALL_KEYS = [...SPORT_KEYS, 'other'];
+
+// Types Strava hors natation / vélo / course : nom et icône
+const OTHER_TYPES = {
+  HighIntensityIntervalTraining: ['HIIT', '🔥'],
+  WeightTraining: ['Musculation', '🏋️'],
+  Workout: ['Entraînement', '💪'],
+  Crossfit: ['CrossFit', '🏋️'],
+  Walk: ['Marche', '🚶'],
+  Hike: ['Randonnée', '🥾'],
+  Yoga: ['Yoga', '🧘'],
+  Pilates: ['Pilates', '🧘'],
+  Rowing: ['Aviron', '🚣'],
+  VirtualRow: ['Rameur', '🚣'],
+  Elliptical: ['Elliptique', '🏃'],
+  StairStepper: ['Stepper', '🪜'],
+  EBikeRide: ['Vélo électrique', '🚲'],
+  EMountainBikeRide: ['VTT électrique', '🚲'],
+  AlpineSki: ['Ski alpin', '⛷️'],
+  BackcountrySki: ['Ski de randonnée', '⛷️'],
+  NordicSki: ['Ski de fond', '⛷️'],
+  Snowboard: ['Snowboard', '🏂'],
+  RockClimbing: ['Escalade', '🧗'],
+  Kayaking: ['Kayak', '🛶'],
+  StandUpPaddling: ['Paddle', '🏄'],
+  Surfing: ['Surf', '🏄'],
+  Soccer: ['Football', '⚽'],
+  Tennis: ['Tennis', '🎾'],
+  Badminton: ['Badminton', '🏸'],
+  Squash: ['Squash', '🎾'],
+  Padel: ['Padel', '🎾'],
+  Golf: ['Golf', '⛳'],
+  InlineSkate: ['Roller', '🛼'],
+  IceSkate: ['Patin', '⛸️'],
+};
+
+// Nom, icône et couleur d'une activité (pour « other », d'après son type Strava)
+export function sportInfo(a) {
+  if (a.sport !== 'other') return SPORTS[a.sport];
+  const [label, icon] = OTHER_TYPES[a.type] || [String(a.type || 'Activité').replace(/([a-z])([A-Z])/g, '$1 $2'), '🏅'];
+  return { label, icon, color: SPORTS.other.color };
+}
 
 const TYPE_MAP = {
   Run: 'run', TrailRun: 'run', VirtualRun: 'run',
@@ -48,12 +93,12 @@ export function currentMonday(offsetWeeks = 0) {
 // ---------- Normalisation ----------
 
 export function normalize(a) {
-  const sport = TYPE_MAP[a.sport_type] || TYPE_MAP[a.type];
-  if (!sport) return null;
+  const sport = TYPE_MAP[a.sport_type] || TYPE_MAP[a.type] || 'other';
   const local = a.start_date_local.replace('Z', '');
   return {
     id: String(a.id),
     name: a.name,
+    type: a.sport_type || a.type || '',
     sport,
     local,
     epoch: Math.floor(new Date(a.start_date).getTime() / 1000),
@@ -99,7 +144,7 @@ export function annotatePace(acts, { excluded = new Set(), tolerance = 0.12 } = 
     a.pace = null;
     a.paceNote = null;
     if (excluded.has(a.id)) { a.paceNote = 'Exclue manuellement'; continue; }
-    if (!a.distance || !a.time) continue;
+    if (!a.distance || !a.time || a.sport === 'other') continue;
     if (a.sport !== 'swim' || !ref) { a.pace = { distance: a.distance, time: a.time }; continue; }
 
     const laps = (a.laps || []).filter(([d, t]) => d > 0 && t > 0);
@@ -141,7 +186,7 @@ function emptyTotals() {
 
 export function weekTotals(acts, mondayKey) {
   const res = { all: emptyTotals() };
-  SPORT_KEYS.forEach(s => (res[s] = emptyTotals()));
+  ALL_KEYS.forEach(s => (res[s] = emptyTotals()));
   for (const a of acts) {
     if (a.week !== mondayKey) continue;
     for (const t of [res[a.sport], res.all]) {
@@ -170,9 +215,9 @@ export function weeklySeries(acts, endMonday, n) {
 export function previousAverage(acts, monday, weeks = 4) {
   const series = weeklySeries(acts, addDays(monday, -7), weeks);
   const avg = { all: emptyTotals() };
-  SPORT_KEYS.forEach(s => (avg[s] = emptyTotals()));
+  ALL_KEYS.forEach(s => (avg[s] = emptyTotals()));
   for (const w of series) {
-    for (const k of ['all', ...SPORT_KEYS]) {
+    for (const k of ['all', ...ALL_KEYS]) {
       for (const f of Object.keys(avg[k])) avg[k][f] += w.totals[k][f] / weeks;
     }
   }

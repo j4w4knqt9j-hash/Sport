@@ -4,7 +4,7 @@ import * as Detail from './detail.js';
 import * as Icu from './intervals.js';
 import * as Coach from './coach.js';
 import {
-  SPORTS, SPORT_KEYS, normalize, isoDay, addDays, currentMonday, mondayOf,
+  SPORTS, SPORT_KEYS, ALL_KEYS, sportInfo, normalize, isoDay, addDays, currentMonday, mondayOf,
   weekTotals, weeklySeries, previousAverage, loadRatio, paceSeries, records,
   annotatePace, averageSpeed, paceValue,
   fmtDuration, fmtDistance, fmtPace, fmtPaceValue, fmtShortPace, fmtClock,
@@ -98,8 +98,9 @@ function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-function iconBox(sport) {
-  const s = SPORTS[sport];
+// Accepte une clé de sport ('run') ou une activité (pour les autres types Strava)
+function iconBox(x) {
+  const s = typeof x === 'string' ? SPORTS[x] : sportInfo(x);
   return `<div class="sport-icon" style="background:${s.color}22">${s.icon}</div>`;
 }
 
@@ -168,6 +169,23 @@ function renderWeek(acts) {
       </div>`;
   }).join('');
 
+  const otherCard = cur.other.count || prev.other.count ? (() => {
+    const types = [...new Set(acts.filter(a => a.sport === 'other' && a.week === key).map(a => `${sportInfo(a).icon} ${sportInfo(a).label}`))];
+    return `
+      <div class="card sport-card other-card">
+        ${iconBox('other')}
+        <div>
+          <div class="name">${SPORTS.other.label}</div>
+          <div class="meta">${cur.other.count} séance${cur.other.count > 1 ? 's' : ''}${types.length ? ` · ${esc(types.join(', '))}` : ''}</div>
+        </div>
+        <div class="val">
+          <strong>${cur.other.count ? fmtDuration(cur.other.time) : '–'}</strong>
+          <span>${cur.other.effort ? `effort ${Math.round(cur.other.effort)}` : ''}</span>
+        </div>
+        <div class="bar-caption">Sem. ${isCurrent ? 'dernière' : 'précédente'} : ${prev.other.count ? `${prev.other.count} séance${prev.other.count > 1 ? 's' : ''} · ${fmtDuration(prev.other.time)}` : 'rien'} · comptées dans la charge</div>
+      </div>`;
+  })() : '';
+
   const loadCard = load ? `
     <div class="card">
       <h2>Charge d'entraînement</h2>
@@ -204,6 +222,7 @@ function renderWeek(acts) {
     </div>
 
     ${sportCards}
+    ${otherCard}
     ${loadCard}
 
     <div class="card">
@@ -246,7 +265,7 @@ function weekCalendar(acts, monday) {
   const letters = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
   const days = letters.map((l, i) => {
     const items = done.filter(a => dayOfAct(a) === i).map(a => `
-        <span class="cal-item done" data-cal-act="${esc(a.id)}" title="${esc(a.name)}">${SPORTS[a.sport].icon}<i>✓</i></span>`).join('')
+        <span class="cal-item done" data-cal-act="${esc(a.id)}" title="${esc(a.name)}">${sportInfo(a).icon}<i>✓</i></span>`).join('')
       + planned.filter(x => x.day === i).map(x => `
         <span class="cal-item ${x.status === 'missed' ? 'missed' : 'planned'}" data-cal-sport="${x.sport}" data-cal-day="${i}" title="${esc(x.title)}">${SPORTS[x.sport].icon}</span>`).join('');
     return `<div class="cal-day ${i === t ? 'today' : ''}">
@@ -285,7 +304,7 @@ function drawWeeklyChart(acts, monday) {
 
   if (mode === 'time') {
     unit = 'h';
-    datasets = SPORT_KEYS.map(s => ({
+    datasets = ALL_KEYS.filter(s => s !== 'other' || series.some(w => w.totals.other.count)).map(s => ({
       label: SPORTS[s].label,
       data: series.map(w => +(w.totals[s].time / 3600).toFixed(2)),
       backgroundColor: SPORTS[s].color,
@@ -450,15 +469,19 @@ function renderList(acts) {
     }
     html += `
       <div class="act" data-open="${esc(a.id)}">
-        ${iconBox(a.sport)}
+        ${iconBox(a)}
         <div style="min-width:0">
           <div class="title">${esc(a.name)}</div>
           <div class="date">${fmtActivityDate(a.local)}</div>
-          <div class="stats">
+          <div class="stats">${a.sport === 'other' ? `
+            <div><b>${esc(sportInfo(a).label)}</b><span>Type</span></div>
+            <div><b>${fmtDuration(a.time)}</b><span>Temps</span></div>
+            ${a.distance > 0 ? `<div><b>${fmtDistance(a.distance, a.sport)}</b><span>Distance</span></div>` : ''}
+            ${a.effort != null ? `<div><b>${a.effort}</b><span>Effort</span></div>` : ''}` : `
             <div><b>${fmtDistance(a.distance, a.sport)}</b><span>Distance</span></div>
             <div><b>${fmtDuration(a.time)}</b><span>Temps</span></div>
             <div><b>${a.pace ? fmtPace(a.pace.distance, a.pace.time, a.sport) : '–'}</b><span>${a.sport === 'ride' ? 'Vitesse' : 'Allure'}</span></div>
-            ${a.sport !== 'swim' ? `<div><b>${Math.round(a.elevation)} m</b><span>D+</span></div>` : ''}
+            ${a.sport !== 'swim' ? `<div><b>${Math.round(a.elevation)} m</b><span>D+</span></div>` : ''}`}
           </div>
           ${a.paceNote ? `<div class="act-foot"><span class="note">⚠ ${esc(a.paceNote)}</span></div>` : ''}
         </div>
@@ -469,7 +492,7 @@ function renderList(acts) {
   $view.innerHTML = `
     ${demoBanner()}
     <div class="chips">
-      ${[['all', 'Tout'], ...SPORT_KEYS.map(s => [s, `${SPORTS[s].icon} ${SPORTS[s].label}`])]
+      ${[['all', 'Tout'], ...SPORT_KEYS.map(s => [s, `${SPORTS[s].icon} ${SPORTS[s].label}`]), ...(acts.some(a => a.sport === 'other') ? [['other', `${SPORTS.other.icon} Autres`]] : [])]
         .map(([k, l]) => `<button data-filter="${k}" class="${f === k ? 'active' : ''}">${l}</button>`).join('')}
     </div>
     ${html || '<p class="muted">Aucune sortie.</p>'}`;
@@ -485,12 +508,12 @@ function renderDetail(acts) {
 
   // tronçons : séries (natation), calculés en démo, ou flux Strava mis en cache
   let detail = Detail.cachedDetail(a.id);
-  if (sport !== 'swim' && (!detail || detail.laps === undefined)) {
+  if (sport !== 'swim' && sport !== 'other' && (!detail || detail.laps === undefined)) {
     if (demo) detail = { splits: demoSplits(a, Detail.SPLIT[sport]), laps: demoWatchLaps(a) };
     else if (Strava.isConnected()) loadStreams(a);
   }
   const kmSplits = Detail.splitsOf(a, detail);
-  const laps = sport === 'swim' ? [] : Detail.lapsOf(detail);
+  const laps = sport === 'swim' || sport === 'other' ? [] : Detail.lapsOf(detail);
   const lapKinds = Detail.classifyLaps(laps);
   // par défaut, les tours de la montre quand il y en a
   const showLaps = laps.length > 0 && state.splitView !== 'km';
@@ -581,12 +604,12 @@ function renderDetail(acts) {
         </div>`).join('') : '<p class="muted">Pas encore assez de sorties pour comparer.</p>'}
     </div>
 
-    <div class="card">
+    ${sport === 'other' ? '' : `<div class="card">
       <div class="card-head"><h2>${splitTitle}</h2><span class="muted">${splitUnit}</span></div>
       ${splitBody}
-    </div>
+    </div>`}
 
-    <button class="btn ghost" data-exclude="${esc(a.id)}">${a.paceNote === 'Exclue manuellement' ? 'Réintégrer dans les stats d\'allure' : 'Exclure des stats d\'allure'}</button>`;
+    ${sport === 'other' ? '' : `<button class="btn ghost" data-exclude="${esc(a.id)}">${a.paceNote === 'Exclue manuellement' ? 'Réintégrer dans les stats d\'allure' : 'Exclure des stats d\'allure'}</button>`}`;
 
   if (splits.length && window.Chart) {
     // barres en vitesse (m/s) : plus la barre est haute, plus c'est rapide ; axe affiché en allure
@@ -760,7 +783,7 @@ function planLines(plan, status) {
     const real = x.act ? ` → réalisé : ${fmtDistance(x.act.distance, x.sport)} en ${fmtDuration(x.act.time)}${dayOfAct(x.act) !== x.day ? ` (le ${Coach.DAYS[dayOfAct(x.act)]})` : ''}` : '';
     return `- ${Coach.DAYS[x.day]} · ${SPORTS[x.sport].label} · ${x.title} (${x.minutes} min) : ${x.content} [${labels[x.status]}]${real}`;
   });
-  status.extras.forEach(a => lines.push(`- ${Coach.DAYS[dayOfAct(a)]} · ${SPORTS[a.sport].label} · hors programme : « ${a.name.slice(0, 60)} », ${fmtDistance(a.distance, a.sport)} en ${fmtDuration(a.time)}`));
+  status.extras.forEach(a => lines.push(`- ${Coach.DAYS[dayOfAct(a)]} · ${sportInfo(a).label} · hors programme : « ${a.name.slice(0, 60)} », ${a.sport === 'other' && !a.distance ? '' : `${fmtDistance(a.distance, a.sport)} en `}${fmtDuration(a.time)}${a.effort != null ? `, effort ${a.effort}` : ''}`));
   return lines;
 }
 
@@ -768,7 +791,8 @@ function planLines(plan, status) {
 function habitualSessions(acts) {
   const monday = currentMonday(0);
   const weeks = weeklySeries(acts, addDays(monday, -7), 3);
-  const avg = k => weeks.reduce((t, w) => t + w.totals[k].count, 0) / weeks.length;
+  // natation, vélo et course seulement : les autres activités ne sont pas programmées
+  const avg = k => weeks.reduce((t, w) => t + (k === 'all' ? SPORT_KEYS.reduce((n, s) => n + w.totals[s].count, 0) : w.totals[k].count), 0) / weeks.length;
   return { weeks, total: Math.max(1, Math.round(avg('all'))), avg };
 }
 
@@ -797,7 +821,7 @@ function planCount(acts, w) {
 
 function doneLines(acts, key) {
   return acts.filter(a => a.week === key).sort((a, b) => a.local.localeCompare(b.local))
-    .map(a => `- ${Coach.DAYS[dayOfAct(a)]} · ${SPORTS[a.sport].label} · « ${a.name.slice(0, 60)} », ${fmtDistance(a.distance, a.sport)} en ${fmtDuration(a.time)}${a.effort != null ? `, effort ${a.effort}` : ''}`);
+    .map(a => `- ${Coach.DAYS[dayOfAct(a)]} · ${sportInfo(a).label} · « ${a.name.slice(0, 60)} », ${a.sport === 'other' && !a.distance ? '' : `${fmtDistance(a.distance, a.sport)} en `}${fmtDuration(a.time)}${a.effort != null ? `, effort ${a.effort}` : ''}`);
 }
 
 function planSituation(acts, adapting, w, count) {
@@ -869,7 +893,7 @@ function nextSituation(acts, sport, opts) {
     lines.push(`Aucune séance de ${label.toLowerCase()} depuis septembre.`);
   }
   const last = sorted[0];
-  if (last) lines.push(`Dernière séance tous sports : ${SPORTS[last.sport].label.toLowerCase()} ${daysAgo(last)}${last.effort != null ? ` (effort ${last.effort})` : ''}.`);
+  if (last) lines.push(`Dernière séance tous sports : ${sportInfo(last).label.toLowerCase()} ${daysAgo(last)}${last.effort != null ? ` (effort ${last.effort})` : ''}.`);
   const curPlan = Coach.getPlan(isoDay(monday));
   const nextPlan = Coach.getPlan(isoDay(currentMonday(1)));
   if (curPlan) lines.push('', `Programme de la semaine en cours : ${curPlan.resume}`, ...planLines(curPlan, planStatus(curPlan, acts, 0)));
@@ -1043,12 +1067,12 @@ function planSheet() {
           <div class="plan-side">${badge[x.status]}${x.status === 'done' ? '' : '<span class="chev">›</span>'}</div>
         </div>`).join('') + extras.map(a => `
         <div class="plan-row extra">
-          ${iconBox(a.sport)}
+          ${iconBox(a)}
           <div>
             <div class="plan-title">${esc(a.name)}</div>
-            <div class="plan-real">${fmtDistance(a.distance, a.sport)} en ${fmtDuration(a.time)}</div>
+            <div class="plan-real">${a.sport === 'other' && !a.distance ? fmtDuration(a.time) : `${fmtDistance(a.distance, a.sport)} en ${fmtDuration(a.time)}`}</div>
           </div>
-          <div class="plan-side"><span class="badge">Hors programme</span></div>
+          <div class="plan-side"><span class="badge">${a.sport === 'other' ? esc(sportInfo(a).label) : 'Hors programme'}</span></div>
         </div>`).join('');
       return `<div class="plan-day ${i === t ? 'is-today' : ''}">
         <div class="plan-day-name">${d.charAt(0).toUpperCase() + d.slice(1)} ${addDays(monday, i).getUTCDate()}</div>
@@ -1659,7 +1683,9 @@ function render() {
 
 // ---------- Synchronisation ----------
 
-async function sync(full = false) {
+// full : tout repartir de zéro ; fromStart : redemander toutes les activités depuis la
+// date de début en gardant ce qui est déjà enregistré (tours, séries…)
+async function sync(full = false, fromStart = false) {
   if (state.syncing) return;
   if (loadPrefs().demo) return toast('Désactive le mode démo pour synchroniser');
   if (!Strava.isConnected()) {
@@ -1672,7 +1698,7 @@ async function sync(full = false) {
   btn.classList.add('spinning');
   try {
     const existing = full ? [] : storedActivities();
-    const after = existing.reduce((m, a) => Math.max(m, a.epoch - 1), START_EPOCH);
+    const after = fromStart ? START_EPOCH : existing.reduce((m, a) => Math.max(m, a.epoch - 1), START_EPOCH);
     const raw = await Strava.fetchActivities(after);
     const fresh = raw.map(normalize).filter(Boolean);
     const byId = new Map(existing.map(a => [a.id, a]));
@@ -1691,7 +1717,7 @@ async function sync(full = false) {
     // tours de la montre des sorties course et vélo (pour l'affichage et le coach)
     let lapsAdded = 0;
     for (const a of [...byId.values()].sort((x, y) => y.local.localeCompare(x.local))) {
-      if (a.sport === 'swim' || a.local < START_DATE || Detail.cachedDetail(a.id)?.laps !== undefined) continue;
+      if (a.sport === 'swim' || a.sport === 'other' || a.local < START_DATE || Detail.cachedDetail(a.id)?.laps !== undefined) continue;
       try {
         const laps = Detail.lapsFrom(await Strava.fetchLapsFull(a.id), a.sport);
         Detail.saveDetail(a.id, { ...(Detail.cachedDetail(a.id) || {}), laps, lapsAt: Date.now() });
@@ -1700,7 +1726,7 @@ async function sync(full = false) {
     }
     const kept = [...byId.values()].filter(a => a.local >= START_DATE);
     localStorage.setItem(STORE, JSON.stringify(kept));
-    savePrefs({ lastSync: Date.now() });
+    savePrefs({ lastSync: Date.now(), allTypes: true });
     toast((added ? `${added} nouvelle${added > 1 ? 's' : ''} activité${added > 1 ? 's' : ''}` : 'Déjà à jour')
       + (lapsAdded ? ` · tours récupérés pour ${lapsAdded} sortie${lapsAdded > 1 ? 's' : ''}` : ''));
     render();
@@ -1805,7 +1831,7 @@ $view.addEventListener('click', e => {
     state.view = 'coach';
     state.detailId = null;
     render();
-    sendCoach(`J'aimerais parler de ma sortie ${SPORTS[a.sport].label.toLowerCase()} « ${a.name} » du ${fmtActivityDate(a.local).split(' · ')[0]}. Voici ton analyse :\n\n${Coach.cachedAnalysis(a.id)?.text || ''}\n\nQu'est-ce que tu me conseilles de travailler en priorité ?`);
+    sendCoach(`J'aimerais parler de ma sortie ${sportInfo(a).label.toLowerCase()} « ${a.name} » du ${fmtActivityDate(a.local).split(' · ')[0]}. Voici ton analyse :\n\n${Coach.cachedAnalysis(a.id)?.text || ''}\n\nQu'est-ce que tu me conseilles de travailler en priorité ?`);
   }
   else if (d.splitView) { state.splitView = d.splitView; render(); }
   else if (d.action === 'back') {
@@ -1930,8 +1956,10 @@ $view.addEventListener('touchend', e => {
   const justConnected = await handleOAuthReturn();
   render();
   const last = loadPrefs().lastSync || 0;
-  if (Strava.isConnected() && !loadPrefs().demo && (justConnected || Date.now() - last > 30 * 60 * 1000)) {
-    sync(justConnected);
+  if (Strava.isConnected() && !loadPrefs().demo) {
+    // une fois : récupérer les autres types d'activités, ignorés par les anciennes versions
+    if (!justConnected && !loadPrefs().allTypes) sync(false, true);
+    else if (justConnected || Date.now() - last > 30 * 60 * 1000) sync(justConnected);
   }
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

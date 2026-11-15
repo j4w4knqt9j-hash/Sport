@@ -10,7 +10,7 @@ Appli mobile (PWA) pour suivre son entraînement en **natation, vélo et course 
 - **Montre Garmin** : les séances proposées par le coach (une seule ou toute la semaine) sont découpées en étapes (échauffement, répétitions, cibles d'allure ou de zone FC, repos en natation) et envoyées sur Intervals.icu, qui les transmet à Garmin Connect puis à la montre. Nécessite un compte Intervals.icu relié à Garmin et sa clé API (Réglages → Montre Garmin). Si l'envoi direct est bloqué, l'appli affiche les séances prêtes à coller dans Intervals.icu.
 - **Mode démo** pour tester sans compte Strava.
 
-Seules les activités à partir du **1er septembre 2026** sont prises en compte (constante `START_DATE` dans `js/app.js`).
+Toutes les activités Strava à partir du **1er septembre 2026** sont prises en compte (natation, vélo, course, et les autres types — HIIT, musculation, marche… — regroupés dans « Autres activités ») (constante `START_DATE` dans `js/app.js`).
 
 Pas de serveur : l'appli tourne dans le navigateur du téléphone et parle directement à l'API Strava. Les activités sont enregistrées sur le téléphone et seules les nouvelles sont téléchargées à chaque synchronisation.
 
